@@ -1,5 +1,14 @@
 export type Severity = 'UNKNOWN' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type FailOn = Severity | 'none';
+/**
+ * The severity threshold at which the build gate fails, or 'none' to disable it.
+ * Deliberately excludes 'UNKNOWN': since UNKNOWN ranks below every other severity,
+ * allowing it as a threshold would make `failOn: 'UNKNOWN'` the *strictest* possible
+ * setting (failing on every finding, including the ones trivy could not score) — the
+ * opposite of what an administrator reading "UNKNOWN" in a dropdown would expect.
+ * UNKNOWN remains a perfectly valid *finding* severity; it is only meaningless as a
+ * threshold.
+ */
+export type FailOn = Exclude<Severity, 'UNKNOWN'> | 'none';
 export type ScanType = 'image' | 'filesystem' | 'repository' | 'config' | 'sbom';
 export type Scanner = 'vuln' | 'secret' | 'misconfig' | 'license';
 export type OutputFormat = 'table' | 'json' | 'sarif';
