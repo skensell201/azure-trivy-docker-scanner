@@ -113,6 +113,32 @@ describe('buildScanArgs', () => {
     expect(args).toContain('trivyscan-1042-3');
     expect(args).toContain('/workspace/.trivy/report-3.json');
   });
+
+  // The host needs to read the report back after the container exits. A
+  // `workingDirectory` containing ".." changes the container's `-w`, but the
+  // report path is computed independently of it, so it always stays under
+  // the mounted workspace regardless of what workingDirectory does to `-w`.
+  it('keeps the report output path under the workspace mount even when workingDirectory escapes it', () => {
+    const args = buildScanArgs(config({ workingDirectory: '../../etc' }), '/tmp/e');
+    expect(args).toContain('/workspace/.trivy/report-0.json');
+    expect(containerReportPath(config({ workingDirectory: '../../etc' }))).toBe(
+      '/workspace/.trivy/report-0.json',
+    );
+  });
+
+  // extraTrivyArgs is appended after our own flags precisely so a later
+  // occurrence cannot win the cobra "last flag wins" race against
+  // --severity/--scanners, and the scan target must remain the final
+  // positional argument no matter what else is configured.
+  it('places --severity and --scanners strictly before extraTrivyArgs, with the target genuinely last', () => {
+    const args = buildScanArgs(
+      config({ ignoreFile: '.trivyignore', extraTrivyArgs: '--offline-scan' }),
+      '/tmp/e',
+    );
+    expect(args.indexOf('--severity')).toBeLessThan(args.indexOf('--offline-scan'));
+    expect(args.indexOf('--scanners')).toBeLessThan(args.indexOf('--offline-scan'));
+    expect(args[args.length - 1]).toBe(config().target);
+  });
 });
 
 describe('buildVersionArgs', () => {
@@ -150,6 +176,16 @@ describe('buildTrivyEnv', () => {
     expect(buildTrivyEnv(config(), { username: 'svc', password: 'p@ss' })).toMatchObject({
       TRIVY_USERNAME: 'svc',
       TRIVY_PASSWORD: 'p@ss',
+    });
+  });
+
+  // A `docker run --env-file` line is KEY=value, split on the first "=":
+  // an "=" inside the value is safe and must survive untouched. A newline
+  // is genuinely unrepresentable in that format, but rejecting it is the
+  // env-file writer's job (a later task), not this builder's.
+  it('preserves an equals sign inside a credential value', () => {
+    expect(buildTrivyEnv(config(), { password: 'p@ss=word' })).toMatchObject({
+      TRIVY_PASSWORD: 'p@ss=word',
     });
   });
 });
