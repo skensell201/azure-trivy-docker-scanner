@@ -26,4 +26,12 @@ describe('splitArgs', () => {
   it('rejects an unterminated quote instead of silently swallowing the rest', () => {
     expect(() => splitArgs('--label "scan run')).toThrow(/Unterminated quote/);
   });
+
+  it('preserves an explicitly empty argument', () => {
+    expect(splitArgs('--label ""')).toEqual(['--label', '']);
+  });
+
+  it('joins a quoted segment to adjacent unquoted text', () => {
+    expect(splitArgs('--label description="my scan"')).toEqual(['--label', 'description=my scan']);
+  });
 });
