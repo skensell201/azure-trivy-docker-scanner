@@ -1,5 +1,7 @@
 import * as path from 'path';
 import { splitArgs } from './args';
+import { isSeverity, SEVERITY_ORDER } from './severity';
+import { OverridableField, Scanner } from './types';
 
 export interface ValidationIssue {
   field: string;
@@ -24,6 +26,46 @@ const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/**
+ * `satisfies Record<OverridableField, true>` makes this map exhaustive at compile
+ * time in both directions, mirroring the equivalent map in
+ * `src/task/ConfigResolver.ts` (duplicated rather than imported: shared/ must not
+ * depend on task/). Deriving the allowed list from the type here means a future
+ * `OverridableField` member cannot be silently rejected by `allowOverrides`
+ * validation just because this file forgot about it.
+ */
+const ALL_OVERRIDABLE_FIELDS = {
+  runner: true,
+  severities: true,
+  scanners: true,
+  failOn: true,
+  ignoreUnfixed: true,
+  timeoutMinutes: true,
+  skipDbUpdate: true,
+  useDockerSocket: true,
+  extraTrivyArgs: true,
+  ignoreFile: true,
+} satisfies Record<OverridableField, true>;
+
+const ALL_OVERRIDABLE_FIELD_LIST = Object.keys(ALL_OVERRIDABLE_FIELDS) as OverridableField[];
+const ALL_OVERRIDABLE_FIELD_SET = new Set<string>(ALL_OVERRIDABLE_FIELD_LIST);
+
+/** Same exhaustiveness technique as ALL_OVERRIDABLE_FIELDS above, for the Scanner union. */
+const ALL_SCANNERS_MAP = {
+  vuln: true,
+  secret: true,
+  misconfig: true,
+  license: true,
+} satisfies Record<Scanner, true>;
+
+const ALL_SCANNERS_LIST = Object.keys(ALL_SCANNERS_MAP) as Scanner[];
+const ALL_SCANNERS_SET = new Set<string>(ALL_SCANNERS_LIST);
+
+// FailOn permits every Severity except UNKNOWN (see the type's doc comment in
+// shared/types.ts) plus the literal 'none'. Derived from SEVERITY_ORDER so this
+// list cannot drift from the Severity vocabulary as it grows.
+const FAIL_ON_SEVERITIES = SEVERITY_ORDER.filter((severity) => severity !== 'UNKNOWN');
 
 /**
  * Validates a single runner. The input comes from admin-form state or from a
@@ -190,12 +232,64 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
   if (config.severities !== undefined) {
     if (!Array.isArray(config.severities) || config.severities.length === 0) {
       issues.push({ field: 'severities', message: 'Select at least one severity.' });
+    } else {
+      config.severities.forEach((severity, index) => {
+        if (typeof severity !== 'string' || !isSeverity(severity)) {
+          issues.push({
+            field: 'severities',
+            message: `severities[${index}] "${String(severity)}" is not a valid severity. Allowed values: ${SEVERITY_ORDER.join(', ')}.`,
+          });
+        }
+      });
     }
   }
 
   if (config.scanners !== undefined) {
     if (!Array.isArray(config.scanners) || config.scanners.length === 0) {
       issues.push({ field: 'scanners', message: 'Select at least one scanner.' });
+    } else {
+      config.scanners.forEach((scanner, index) => {
+        if (typeof scanner !== 'string' || !ALL_SCANNERS_SET.has(scanner)) {
+          issues.push({
+            field: 'scanners',
+            message: `scanners[${index}] "${String(scanner)}" is not a valid scanner. Allowed values: ${ALL_SCANNERS_LIST.join(', ')}.`,
+          });
+        }
+      });
+    }
+  }
+
+  if (config.failOn !== undefined) {
+    const failOn = config.failOn;
+    const isValid =
+      failOn === 'none' || (typeof failOn === 'string' && (FAIL_ON_SEVERITIES as readonly string[]).includes(failOn));
+    if (!isValid) {
+      issues.push({
+        field: 'failOn',
+        message:
+          `failOn "${String(failOn)}" is not valid. Allowed values: none, ${FAIL_ON_SEVERITIES.join(', ')}. ` +
+          'UNKNOWN is deliberately excluded: it ranks lowest of all severities, so using it as a threshold ' +
+          'would fail on every finding, the opposite of what a lowest-severity threshold suggests.',
+      });
+    }
+  }
+
+  if (config.allowOverrides !== undefined) {
+    const allowOverrides = config.allowOverrides;
+    if (!Array.isArray(allowOverrides)) {
+      issues.push({
+        field: 'allowOverrides',
+        message: `allowOverrides must be a list of fields. Allowed values: ${ALL_OVERRIDABLE_FIELD_LIST.join(', ')}.`,
+      });
+    } else {
+      allowOverrides.forEach((field, index) => {
+        if (typeof field !== 'string' || !ALL_OVERRIDABLE_FIELD_SET.has(field)) {
+          issues.push({
+            field: 'allowOverrides',
+            message: `allowOverrides[${index}] "${String(field)}" is not a recognized field. Allowed values: ${ALL_OVERRIDABLE_FIELD_LIST.join(', ')}.`,
+          });
+        }
+      });
     }
   }
 

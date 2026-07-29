@@ -320,4 +320,99 @@ describe('validateDefaults', () => {
     const issues = validateDefaults(defaults({ cacheDir: '/var' }));
     expect(issues).toEqual([{ field: 'cacheDir', message: expect.stringContaining('top-level') }]);
   });
+
+  // --- allowOverrides: must be an array of recognized OverridableField members ---
+
+  it('accepts a well-formed allowOverrides array', () => {
+    expect(
+      validateDefaults(defaults({ allowOverrides: ['severities', 'failOn'] })),
+    ).toEqual([]);
+  });
+
+  it('accepts an empty allowOverrides array, meaning nothing may be overridden', () => {
+    expect(validateDefaults(defaults({ allowOverrides: [] }))).toEqual([]);
+  });
+
+  it('rejects allowOverrides given as a string instead of an array', () => {
+    const issues = validateDefaults(
+      defaults({ allowOverrides: 'severities' as unknown as DefaultsConfig['allowOverrides'] }),
+    );
+    expect(issues).toEqual([
+      { field: 'allowOverrides', message: expect.stringContaining('list') },
+    ]);
+  });
+
+  it('rejects allowOverrides given as a plain object instead of an array', () => {
+    const issues = validateDefaults(
+      defaults({
+        allowOverrides: { runner: true } as unknown as DefaultsConfig['allowOverrides'],
+      }),
+    );
+    expect(issues).toEqual([
+      { field: 'allowOverrides', message: expect.stringContaining('list') },
+    ]);
+  });
+
+  it('rejects an allowOverrides element that is not an OverridableField, naming it', () => {
+    const issues = validateDefaults(
+      defaults({
+        allowOverrides: ['severities', 'bogus'] as unknown as DefaultsConfig['allowOverrides'],
+      }),
+    );
+    expect(issues).toEqual([
+      { field: 'allowOverrides', message: expect.stringContaining('bogus') },
+    ]);
+  });
+
+  // --- failOn: must be 'none' or a FailOn severity; UNKNOWN is deliberately excluded ---
+
+  it('accepts failOn: none', () => {
+    expect(validateDefaults(defaults({ failOn: 'none' }))).toEqual([]);
+  });
+
+  it('accepts failOn: CRITICAL', () => {
+    expect(validateDefaults(defaults({ failOn: 'CRITICAL' }))).toEqual([]);
+  });
+
+  it('rejects a lowercase failOn value instead of silently resolving it downstream', () => {
+    const issues = validateDefaults(
+      defaults({ failOn: 'critical' as unknown as DefaultsConfig['failOn'] }),
+    );
+    expect(issues).toEqual([{ field: 'failOn', message: expect.stringContaining('failOn') }]);
+  });
+
+  it('rejects failOn: UNKNOWN and explains why, since it ranks lowest and would fail every build', () => {
+    const issues = validateDefaults(
+      defaults({ failOn: 'UNKNOWN' as unknown as DefaultsConfig['failOn'] }),
+    );
+    expect(issues).toEqual([
+      {
+        field: 'failOn',
+        message: expect.stringContaining('UNKNOWN'),
+      },
+    ]);
+    expect(issues[0].message.toLowerCase()).toContain('lowest');
+  });
+
+  // --- severities: every element must be a valid Severity, naming the offender ---
+
+  it('rejects an invalid severity element, naming it, alongside a valid one', () => {
+    const issues = validateDefaults(
+      defaults({ severities: ['BOGUS', 'HIGH'] as unknown as Severity[] }),
+    );
+    expect(issues).toEqual([
+      { field: 'severities', message: expect.stringContaining('BOGUS') },
+    ]);
+  });
+
+  // --- scanners: every element must be a valid Scanner, naming the offender ---
+
+  it('rejects an invalid scanner element, naming it, alongside a valid one', () => {
+    const issues = validateDefaults(
+      defaults({ scanners: ['vuln', 'bogus'] as unknown as Scanner[] }),
+    );
+    expect(issues).toEqual([
+      { field: 'scanners', message: expect.stringContaining('bogus') },
+    ]);
+  });
 });
