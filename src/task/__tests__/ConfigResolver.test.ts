@@ -109,4 +109,51 @@ describe('resolveConfig', () => {
     expect(config.buildId).toBe('1042');
     expect(config.scanIndex).toBe(2);
   });
+
+  it('reports "none" when an empty allowOverrides withholds every field', () => {
+    expect(() =>
+      resolveConfig({
+        defaults: { ...defaults, allowOverrides: [] },
+        runners,
+        inputs: inputs({ failOn: 'LOW' }),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(/Overridable fields: none/);
+  });
+
+  it('lets an explicit false override win over an admin default of true', () => {
+    const config = resolveConfig({
+      defaults: { ...defaults, ignoreUnfixed: true },
+      runners,
+      inputs: inputs({ ignoreUnfixed: false }),
+      agent,
+      scanIndex: 0,
+    });
+    expect(config.ignoreUnfixed).toBe(false);
+  });
+
+  it('subjects a pipeline-named runner to the "runner" policy like any other field', () => {
+    expect(() =>
+      resolveConfig({
+        defaults: { ...defaults, allowOverrides: ['severities'] },
+        runners,
+        inputs: inputs({ runner: 'hardened' }),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(PolicyViolationError);
+  });
+
+  it('reports RunnerNotFoundError when the requested runner is disabled and none other is enabled', () => {
+    expect(() =>
+      resolveConfig({
+        defaults,
+        runners: [{ alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: false }],
+        inputs: inputs({ runner: 'legacy' }),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(RunnerNotFoundError);
+  });
 });
