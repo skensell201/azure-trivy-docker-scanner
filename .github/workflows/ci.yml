@@ -19,6 +19,22 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build:task
+      - name: Smoke-test the assembled task's module resolution
+        # Not a functional test: the entry point exits non-zero here because there is no
+        # Azure Pipelines agent context (no System.CollectionUri, etc). The one failure mode
+        # this step guards against is the compiled task failing to find its own modules once
+        # copied into TrivyScan/ - a real packaging bug that unit tests, which run against
+        # src/ directly, cannot see. See scripts/build-task.js for why the layout is fiddly.
+        run: |
+          set +e
+          output=$(node -e "require('./TrivyScan/task/index.js')" 2>&1)
+          set -e
+          echo "$output"
+          if echo "$output" | grep -q "Cannot find module"; then
+            echo "Assembled task failed to resolve its own modules." >&2
+            exit 1
+          fi
 
   package:
     needs: verify
