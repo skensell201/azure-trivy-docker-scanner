@@ -56,6 +56,7 @@ function buildConfigClient(): ConfigClient {
       extensionId: EXTENSION_ID,
       auth: { mode: 'pat', token },
       fetch: httpFetch,
+      log: (message) => tl.warning(message),
     });
   }
 
@@ -65,6 +66,9 @@ function buildConfigClient(): ConfigClient {
     extensionId: EXTENSION_ID,
     auth: { mode: 'bearer', token: tl.getVariable('System.AccessToken') ?? '' },
     fetch: httpFetch,
+    // A missing document falls back to defaults; say so, otherwise a mistyped publisher or an
+    // uninstalled extension looks exactly like an administrator who has not configured anything.
+    log: (message) => tl.warning(message),
   });
 }
 
