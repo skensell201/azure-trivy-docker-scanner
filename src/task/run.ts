@@ -14,7 +14,7 @@ import {
 } from './DockerCommand';
 import { removeEnvFile, writeEnvFile } from './EnvFile';
 import { evaluateGate, GateResult } from './GateEvaluator';
-import { ProcessRunner } from './ProcessRunner';
+import { ProcessResult, ProcessRunner } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { parseTrivyReport, parseVersion } from './ReportParser';
 import {
@@ -40,6 +40,55 @@ function createDirectoryOrThrow(dirPath: string, description: string, extraGuida
   }
 }
 
+/**
+ * ChildProcessRunner uses exit code 127 as a sentinel for *every* spawn failure -- ENOENT
+ * (not found), EACCES (permission denied), or anything else the OS reports when it cannot
+ * even start the child (see its own doc comment) -- so the code alone cannot tell "docker
+ * is missing" apart from some other spawn problem. Node's own error message for the
+ * not-found case always contains "ENOENT" (e.g. "spawn docker ENOENT") regardless of OS
+ * or Node version, which is the durable signal checked here instead of assuming 127 always
+ * means this.
+ */
+function isDockerNotFoundError(scan: Pick<ProcessResult, 'exitCode' | 'stderr'>): boolean {
+  return scan.exitCode === 127 && /ENOENT/.test(scan.stderr);
+}
+
+function dockerNotFoundMessage(scan: Pick<ProcessResult, 'stderr'>): string {
+  return (
+    "This agent has no docker on its PATH (spawn docker ENOENT). This task runs trivy inside " +
+    'a container and requires docker on the agent; it cannot fall back to a local trivy ' +
+    `install by design. Install docker on this agent, or route the pipeline to one that ` +
+    `already has it. Detail: ${scan.stderr.trim()}`
+  );
+}
+
+/**
+ * Trivy's own wording for a failed database download has shifted across releases ("DB
+ * error: failed to download vulnerability DB", "init error: DB error: failed to download
+ * vulnerability DB", "OCI artifact error" vs "OCI repository error", ...), but every
+ * version of that message has kept this substring, so it is the durable signal to match
+ * on rather than a specific release's exact phrasing. Checking both streams because a
+ * fatal trivy error can land on either depending on how it was raised.
+ */
+function isDbDownloadFailure(scan: Pick<ProcessResult, 'stdout' | 'stderr'>): boolean {
+  return /failed to download vulnerability db/i.test(`${scan.stderr}\n${scan.stdout}`);
+}
+
+function dbDownloadFailureMessage(
+  config: ResolvedScanConfig,
+  credentials: RegistryCredentials,
+): string {
+  const credentialNote =
+    credentials.username || credentials.password
+      ? 'credentials were supplied'
+      : 'no credentials were supplied';
+  return (
+    `The vulnerability database could not be downloaded from dbRepository "${config.dbRepository}" ` +
+    `(${credentialNote}). Check that this agent can reach that registry and that any required ` +
+    'credentials are configured for it.'
+  );
+}
+
 export interface RunScanArgs {
   defaults: DefaultsConfig;
   runners: RunnerConfig[];
@@ -54,7 +103,10 @@ export interface RunScanArgs {
 export interface RunScanResult {
   report: NormalizedReport;
   gate: GateResult;
+  /** Path to trivy's own raw JSON report -- this is what the TrivyReports artifact carries. */
   reportPath: string;
+  /** Path to the normalized report -- this is what the results-tab attachment carries. */
+  normalizedReportPath: string;
 }
 
 export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
@@ -66,6 +118,17 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     agent: args.agent,
     scanIndex: args.scanIndex,
   });
+
+  // Created before the version probe below: buildVersionArgs bind-mounts cacheDir, and if
+  // that directory does not exist yet, docker itself creates it on a first run -- as root.
+  // Creating it here first means it is always this task (not the docker daemon) that
+  // creates it, so the "an administrator can change it" guidance in the message below
+  // actually applies from the very first run.
+  createDirectoryOrThrow(
+    config.cacheDir,
+    'trivy cache directory',
+    "This path comes from the project's Trivy settings (cacheDir) - an administrator can change it there.",
+  );
 
   // The version probe is decoration (see ReportParser.parseVersion): a garbled response
   // already cannot fail the scan below, and neither can the probe call itself throwing
@@ -83,11 +146,6 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     );
   }
 
-  createDirectoryOrThrow(
-    config.cacheDir,
-    'trivy cache directory',
-    "This path comes from the project's Trivy settings (cacheDir) - an administrator can change it there.",
-  );
   createDirectoryOrThrow(path.join(config.sourcesDir, '.trivy'), 'report output directory', '');
 
   const envFile = writeEnvFile(
@@ -98,6 +156,12 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   const timeoutMs = config.timeoutMinutes * 60_000 + 30_000;
 
   try {
+    // buildScanArgs always requests `--format json --output <path>`: the gate
+    // (evaluateGate below) and the normalized-report attachment both depend on parsing
+    // that file, so the JSON run is not optional and does not live behind `formats`.
+    // `formats` therefore only selects which *additional* outputs (the table log, sarif)
+    // are produced alongside it -- listing or omitting 'json' in `formats` has no effect,
+    // by design.
     const scan = await processRunner.run('docker', buildScanArgs(config, envFile), {
       timeoutMs,
       onStdout: (chunk) => process.stdout.write(chunk),
@@ -114,7 +178,15 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
       // A non-zero docker exit is an infrastructure failure (docker itself could not
       // run the container), never "the scan found vulnerabilities" -- trivy always runs
       // with --exit-code 0 for exactly that reason, so the gate is the only thing that
-      // can fail a build over findings.
+      // can fail a build over findings. Two specific classes get a named, actionable
+      // message instead of the generic one below; anything else falls through to it
+      // rather than being mislabelled.
+      if (isDockerNotFoundError(scan)) {
+        throw new ScanExecutionError(dockerNotFoundMessage(scan));
+      }
+      if (isDbDownloadFailure(scan)) {
+        throw new ScanExecutionError(dbDownloadFailureMessage(config, args.credentials));
+      }
       throw new ScanExecutionError(
         `docker exited with code ${scan.exitCode} while running ${config.runner.image}. ` +
           `This is an infrastructure failure, not a scan result. Output: ${scan.stderr.trim() || scan.stdout.trim()}`,
@@ -177,19 +249,52 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
 
   const gate = evaluateGate(report, config.failOn);
 
+  // The attachment below is the contract the results-tab plan depends on: schemaVersion,
+  // artifactName, kindCounts, each finding's kind, and (via `report.runner`) the runner
+  // alias, trivy version and database date -- none of which exist in trivy's own raw JSON
+  // (report-0.json, still published separately below as the TrivyReports artifact). Only
+  // the fields NormalizedReport actually declares are written here: `report` itself also
+  // carries `unrecognizedSeverities` (ReportParser's own extension), which is not part of
+  // that contract and must not leak into the file the results tab is meant to read.
+  const normalizedReportPath = path.join(config.sourcesDir, '.trivy', `normalized-${config.scanIndex}.json`);
+  const normalizedReport: NormalizedReport = {
+    schemaVersion: report.schemaVersion,
+    scanType: report.scanType,
+    target: report.target,
+    artifactName: report.artifactName,
+    ...(report.createdAt !== undefined ? { createdAt: report.createdAt } : {}),
+    runner: report.runner,
+    findings: report.findings,
+    counts: report.counts,
+    kindCounts: report.kindCounts,
+  };
+  try {
+    fs.writeFileSync(normalizedReportPath, JSON.stringify(normalizedReport));
+  } catch (error) {
+    // Loud and fatal, unlike the env-file removal failure above: that file is a leftover
+    // to warn about, this one is the attachment the next plan is built on, so a build that
+    // cannot produce it must not quietly report success.
+    throw new ScanExecutionError(
+      `Could not write the normalized report to "${normalizedReportPath}": ${(error as Error).message}. ` +
+        'The results-tab attachment depends on this file, so the scan cannot continue without it.',
+    );
+  }
+
   publisher.printSummary(report, config.runner.alias);
   if (config.formats.includes('table')) {
     publisher.printFindingsTable(report);
   }
-  publisher.attachReport(reportPath, config.scanIndex);
+  publisher.attachReport(normalizedReportPath, config.scanIndex);
   if (config.publishArtifact) {
+    // Unlike the attachment above, a user downloading build results wants trivy's own
+    // output -- that is what "TrivyReports" has always meant -- so this stays the raw file.
     publisher.publishArtifact(reportPath, 'TrivyReports');
   }
   if (gate.blocking.length > 0) {
     publisher.logBlockingFindings(gate.blocking);
   }
 
-  return { report, gate, reportPath };
+  return { report, gate, reportPath, normalizedReportPath };
 }
 
 /**

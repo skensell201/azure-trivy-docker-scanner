@@ -151,6 +151,82 @@ describe('runScan', () => {
     expect(lines.some((line) => line.includes('task.addattachment'))).toBe(true);
   });
 
+  /**
+   * Extracts the host path a `##vso[task.addattachment ...]` / `##vso[artifact.upload ...]`
+   * line points at, so tests can read back and assert on the actual file content instead
+   * of only asserting the logging command was emitted at all.
+   */
+  const attachedPath = (predicate: (line: string) => boolean): string => {
+    const line = lines.find(predicate);
+    if (line === undefined) {
+      throw new Error('expected line not found');
+    }
+    return line.slice(line.indexOf(']') + 1);
+  };
+
+  // This is the crux of fix 1: the attachment must carry the *normalized* report (the
+  // one with schemaVersion, artifactName, kindCounts and each finding's kind), not the
+  // raw trivy JSON that report-0.json already is. Without this, everything the parser
+  // computes is thrown away and the results tab has nothing to read.
+  it('attaches the normalized report, not the raw trivy JSON', async () => {
+    await invoke(new FakeRunner(writeReport));
+    const hostPath = attachedPath((line) => line.includes('task.addattachment'));
+
+    expect(hostPath).not.toBe(path.join(workspace, '.trivy', 'report-0.json'));
+    const attached = JSON.parse(fs.readFileSync(hostPath, 'utf8'));
+    expect(attached).toMatchObject({
+      schemaVersion: 1,
+      artifactName: 'app:1.4.2',
+    });
+    expect(attached.findings[0]).toMatchObject({ kind: 'vulnerability', id: 'CVE-1' });
+    expect(attached.kindCounts).toBeDefined();
+  });
+
+  it('carries the runner alias, trivy version and database date in the attached report', async () => {
+    await invoke(new FakeRunner(writeReport));
+    const hostPath = attachedPath((line) => line.includes('task.addattachment'));
+    const attached = JSON.parse(fs.readFileSync(hostPath, 'utf8'));
+
+    expect(attached.runner).toMatchObject({
+      alias: 'baseline',
+      trivyVersion: '0.58.1',
+      dbUpdatedAt: '2026-07-28T06:11:53Z',
+    });
+  });
+
+  // The in-memory NormalizedReport already neutralizes control characters in trivy-reported
+  // text (ReportParser.sanitizeFinding); this pins that the *attached file* carries that same
+  // neutralized text rather than whatever trivy wrote raw to report-0.json, which was exactly
+  // the bug: the sanitized model was computed and then thrown away in favor of the raw file.
+  it('neutralizes a hostile finding title in the attached content, not merely in memory', async () => {
+    const hostileTitle = 'escape\n##vso[task.complete result=Succeeded]';
+    const runner = new FakeRunner(() => {
+      fs.mkdirSync(path.join(workspace, '.trivy'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspace, '.trivy', 'report-0.json'),
+        JSON.stringify({
+          ArtifactName: 'app:1.4.2',
+          Results: [
+            {
+              Target: 'app:1.4.2',
+              Vulnerabilities: [
+                { VulnerabilityID: 'CVE-9', PkgName: 'foo', Severity: 'CRITICAL', Title: hostileTitle },
+              ],
+            },
+          ],
+        }),
+      );
+    });
+
+    await invoke(runner);
+
+    const hostPath = attachedPath((line) => line.includes('task.addattachment'));
+    const attached = JSON.parse(fs.readFileSync(hostPath, 'utf8'));
+    expect(attached.findings[0].title).toBe('escape ##vso[task.complete result=Succeeded]');
+    expect(attached.findings[0].title).not.toMatch(/[\n\r]/);
+    expect(attached.findings[0].title).not.toBe(hostileTitle);
+  });
+
   // The attachment above is what the results tab reads; the artifact is what a user
   // downloads from the build. They are not the same publish, and publishArtifact
   // defaults to true (ConfigResolver), so the default `invoke` helper exercises it.
@@ -158,6 +234,37 @@ describe('runScan', () => {
     await invoke(new FakeRunner(writeReport));
     expect(lines.some((line) => line.includes('artifactname=TrivyReports'))).toBe(true);
   });
+
+  // A user downloading build results wants trivy's own output (that is what "TrivyReports"
+  // has always meant); only the results-tab attachment above switches to the normalized shape.
+  it('publishes the raw trivy JSON, not the normalized report, as the TrivyReports artifact', async () => {
+    await invoke(new FakeRunner(writeReport));
+    const hostPath = attachedPath((line) => line.includes('artifactname=TrivyReports'));
+
+    expect(hostPath).toBe(path.join(workspace, '.trivy', 'report-0.json'));
+    const raw = JSON.parse(fs.readFileSync(hostPath, 'utf8'));
+    expect(raw.SchemaVersion).toBe(2);
+    expect(raw.schemaVersion).toBeUndefined();
+  });
+
+  // Self-review pin: the attachment is the contract the results-tab plan depends on, so a
+  // failure writing it must fail the scan loudly rather than silently publishing nothing
+  // (or worse, an empty/stale file) while the build goes green.
+  itIfPermissionsEnforced(
+    'fails the scan loudly when the normalized report cannot be written',
+    async () => {
+      const trivyDir = path.join(workspace, '.trivy');
+      const runner = new FakeRunner(() => {
+        writeReport();
+        fs.chmodSync(trivyDir, 0o555);
+      });
+      try {
+        await expect(invoke(runner)).rejects.toThrow(/normalized report/i);
+      } finally {
+        fs.chmodSync(trivyDir, 0o755);
+      }
+    },
+  );
 
   it('does not publish the report as a build artifact when publishArtifact is cleared', async () => {
     const runner = new FakeRunner(writeReport);
@@ -219,6 +326,91 @@ describe('runScan', () => {
     const runner = new FakeRunner();
     runner.results = [{ exitCode: 125, stdout: '', stderr: 'Cannot connect to the Docker daemon', timedOut: false }];
     await expect(invoke(runner)).rejects.toThrow(/Docker daemon/);
+  });
+
+  // Docker missing from the agent's PATH is the most likely first-run failure for this
+  // task's audience. ChildProcessRunner's own doc comment says it uses exit code 127 as a
+  // sentinel for *every* spawn failure (ENOENT, EACCES, ...), so 127 alone cannot tell
+  // "docker is missing" apart from some other spawn problem -- only the ENOENT-shaped
+  // stderr node attaches for that specific case makes it a reliable signal.
+  it('explains that the agent has no docker on its PATH when the scan exits 127 with an ENOENT-shaped stderr', async () => {
+    const runner = new FakeRunner();
+    runner.results = [{ exitCode: 127, stdout: '', stderr: 'spawn docker ENOENT', timedOut: false }];
+    let error: Error | undefined;
+    try {
+      await invoke(runner);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error?.message).toMatch(/docker/i);
+    expect(error?.message).toMatch(/PATH/);
+    expect(error?.message).toMatch(/cannot fall back/i);
+  });
+
+  // Fall-through: a bare 127 whose stderr does not carry the ENOENT shape must not be
+  // mislabelled as "docker is missing" -- it falls through to the ordinary infrastructure
+  // message instead, the same way the db-download check below falls through.
+  it('does not mislabel a 127 exit without an ENOENT-shaped stderr as docker being unavailable', async () => {
+    const runner = new FakeRunner();
+    runner.results = [{ exitCode: 127, stdout: '', stderr: 'permission denied', timedOut: false }];
+    await expect(invoke(runner)).rejects.toThrow(/infrastructure failure/i);
+  });
+
+  // The spec requires naming dbRepository and whether credentials were supplied. Matching
+  // on "failed to download vulnerability DB" rather than a full sentence: that substring has
+  // stayed stable across trivy releases even as the surrounding wording (init error vs DB
+  // error, OCI artifact vs OCI repository) has changed.
+  it('names the dbRepository and notes credentials were supplied when the vulnerability database could not be downloaded', async () => {
+    const runner = new FakeRunner();
+    runner.results = [
+      {
+        exitCode: 1,
+        stdout: '',
+        stderr: 'FATAL	Fatal error	 run error: db error: failed to download vulnerability DB: OCI repository error',
+        timedOut: false,
+      },
+    ];
+    let error: Error | undefined;
+    try {
+      await runScan({
+        defaults,
+        runners,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: { username: 'svc', password: 'secret' },
+      });
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error?.message).toMatch(/reg\.corp\/trivy-db:2/);
+    expect(error?.message).toMatch(/credentials were supplied/i);
+  });
+
+  it('notes that no credentials were supplied when the vulnerability database could not be downloaded without any', async () => {
+    const runner = new FakeRunner();
+    runner.results = [
+      { exitCode: 1, stdout: '', stderr: 'init error: DB error: failed to download vulnerability DB', timedOut: false },
+    ];
+    let error: Error | undefined;
+    try {
+      await invoke(runner);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error?.message).toMatch(/reg\.corp\/trivy-db:2/);
+    expect(error?.message).toMatch(/no credentials were supplied/i);
+  });
+
+  // Fall-through: an unrelated non-zero exit that does not clearly indicate a database
+  // failure must not be mislabelled as one -- it falls through to the ordinary
+  // infrastructure message instead of guessing.
+  it('falls back to the generic infrastructure message when a non-zero exit does not clearly indicate a database failure', async () => {
+    const runner = new FakeRunner();
+    runner.results = [{ exitCode: 1, stdout: '', stderr: 'panic: some unrelated trivy crash', timedOut: false }];
+    await expect(invoke(runner)).rejects.toThrow(/infrastructure failure/i);
   });
 
   it('names the timeout input when the container is killed', async () => {
@@ -350,6 +542,32 @@ describe('runScan', () => {
     expect(resultB.reportPath).toBe(path.join(workspace, '.trivy', 'report-1.json'));
     expect(resultA.report.findings[0].id).toBe('CVE-A');
     expect(resultB.report.findings[0].id).toBe('CVE-B');
+  });
+
+  // Fix 4: the version probe bind-mounts cacheDir (buildVersionArgs), so if the probe ran
+  // before the directory existed, docker itself would create it on a first run -- as root,
+  // and before the careful "an administrator can change it" guidance ever gets a chance to
+  // fire. The cache directory must exist by the time the probe call is made.
+  it('creates the cache directory before probing the runner version', async () => {
+    let cacheDirExistedDuringProbe: boolean | undefined;
+    class ProbeOrderRunner implements ProcessRunner {
+      run(command: string, args: string[]): Promise<ProcessResult> {
+        if (args.includes('version')) {
+          cacheDirExistedDuringProbe = fs.existsSync(path.join(workspace, '_trivy-cache'));
+          return Promise.resolve({
+            exitCode: 0,
+            stdout: '{"Version":"0.58.1","VulnerabilityDB":{"UpdatedAt":"2026-07-28T06:11:53Z"}}',
+            stderr: '',
+            timedOut: false,
+          });
+        }
+        writeReport();
+        return Promise.resolve({ exitCode: 0, stdout: '', stderr: '', timedOut: false });
+      }
+    }
+
+    await invoke(new ProbeOrderRunner());
+    expect(cacheDirExistedDuringProbe).toBe(true);
   });
 
   // The cache directory is the one directory-creation failure with somewhere for the
