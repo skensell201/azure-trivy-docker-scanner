@@ -128,10 +128,10 @@ function buildPolicyMessage(violations: PolicyViolation[], allowed: OverridableF
   const fieldList = violations.map((violation) => `"${violation.field}"`).join(' and ');
   const pronoun = violations.length > 1 ? 'them' : 'it';
   const enforcedSentences = violations
-    .map((violation) => `The project sets ${violation.field} to ${formatEnforcedValue(violation.enforcedValue)}.`)
+    .map((violation) => `The collection sets ${violation.field} to ${formatEnforcedValue(violation.enforcedValue)}.`)
     .join(' ');
   return (
-    `The pipeline sets ${fieldList}, but the project policy does not allow overriding ${pronoun}. ` +
+    `The pipeline sets ${fieldList}, but the collection policy does not allow overriding ${pronoun}. ` +
     `${enforcedSentences} ` +
     `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Collection Settings > Trivy Scanner.`
   );

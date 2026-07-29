@@ -578,7 +578,7 @@ describe('runScan', () => {
   });
 
   // The cache directory is the one directory-creation failure with somewhere for the
-  // user to go: it comes from the project's Trivy settings (cacheDir), so the message
+  // user to go: it comes from the collection's Trivy settings (cacheDir), so the message
   // must point there in addition to naming the path and the underlying reason.
   itIfPermissionsEnforced(
     'names the cache directory, its path and the reason when it cannot be created',

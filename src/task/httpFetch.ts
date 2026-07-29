@@ -9,7 +9,7 @@ import { FetchLike } from './ConfigClient';
 // the default to expire — and so a future change to it does not silently regress unnoticed.
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
-// A settings document (the runner catalog, project defaults) is a few kilobytes; 1 MiB is
+// A settings document (the runner catalog, collection defaults) is a few kilobytes; 1 MiB is
 // generous headroom. The body is capped rather than left unbounded: without this, a misbehaving
 // or malicious endpoint could hold the process buffering an arbitrarily large response in memory.
 export const MAX_BODY_BYTES = 1024 * 1024;

@@ -206,7 +206,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   createDirectoryOrThrow(
     config.cacheDir,
     'trivy cache directory',
-    "This path comes from the project's Trivy settings (cacheDir) - an administrator can change it there.",
+    "This path comes from the collection's Trivy settings (cacheDir) - an administrator can change it there.",
   );
 
   // Before the version probe and the scan below, both of which pull the runner image: a
@@ -261,7 +261,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     if (scan.timedOut) {
       await processRunner.run('docker', ['rm', '-f', containerName(config)]);
       throw new ScanExecutionError(
-        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
+        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the collection default.`,
       );
     }
 

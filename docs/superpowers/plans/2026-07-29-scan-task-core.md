@@ -1067,7 +1067,7 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     }
     if (!allowed.includes(field)) {
       throw new PolicyViolationError(
-        `The pipeline sets "${field}", but the project policy does not allow overriding it. ` +
+        `The pipeline sets "${field}", but the collection policy does not allow overriding it. ` +
           `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Collection Settings > Trivy Scanner.`,
       );
     }
@@ -3280,7 +3280,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   if (scan.timedOut) {
     await processRunner.run('docker', ['rm', '-f', containerName(config)]);
     throw new ScanExecutionError(
-      `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
+      `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the collection default.`,
     );
   }
 
@@ -3612,7 +3612,7 @@ function buildArgs(
     if (scan.timedOut) {
       await processRunner.run('docker', ['rm', '-f', containerName(config)]);
       throw new ScanExecutionError(
-        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
+        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the collection default.`,
       );
     }
 

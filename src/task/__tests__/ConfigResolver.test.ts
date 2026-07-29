@@ -382,7 +382,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     expect(config.runner.alias).toBe('baseline');
   });
 
-  it('names the value the project enforces in the policy violation message', () => {
+  it('names the value the collection enforces in the policy violation message', () => {
     expect(() =>
       resolveConfig({
         defaults: { ...defaults, allowOverrides: ['severities'], failOn: 'CRITICAL' },
@@ -391,7 +391,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
         agent,
         scanIndex: 0,
       }),
-    ).toThrow(/project sets failOn to "CRITICAL"/);
+    ).toThrow(/collection sets failOn to "CRITICAL"/);
   });
 });
 
