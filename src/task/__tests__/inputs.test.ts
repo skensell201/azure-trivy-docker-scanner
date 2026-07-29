@@ -25,6 +25,13 @@ describe('readInputs', () => {
     expect(inputs.severities).toBeUndefined();
     expect(inputs.failOn).toBeUndefined();
     expect(inputs.runner).toBeUndefined();
+    // The mocked getBoolInput below returns `false` for every name regardless of whether the
+    // pipeline set it, exactly like the real task lib does for an unset boolean input. If
+    // optionalBool ever degenerated into a bare `getBoolInput` call, these would flip to `false`.
+    expect(inputs.ignoreUnfixed).toBeUndefined();
+    expect(inputs.skipDbUpdate).toBeUndefined();
+    expect(inputs.useDockerSocket).toBeUndefined();
+    expect(inputs.publishArtifact).toBeUndefined();
   });
 
   it('parses severity and scanner lists', () => {
@@ -164,5 +171,90 @@ describe('readInputs', () => {
       extraTrivyArgs: '--offline-scan',
       workingDirectory: 'services/api',
     });
+  });
+
+  // Fix 2: a comma-separated list that is entirely blank (e.g. produced by an empty pipeline
+  // variable substitution `scanners: $(SOME_VAR)`) must not silently become `[]`. An empty array
+  // is not `undefined`, so ConfigResolver would treat it as a real override and discard the
+  // administrator's setting instead of falling back to it.
+  it('rejects a scanners list that is blank after trimming', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', scanners: ' ' });
+    expect(() => readInputs()).toThrow(/"scanners"/);
+  });
+
+  it('rejects a formats list that is blank after trimming', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', formats: ' ' });
+    expect(() => readInputs()).toThrow(/"formats"/);
+  });
+
+  it('skips blank elements between commas in a list', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', scanners: 'vuln,,secret' });
+    expect(readInputs().scanners).toEqual(['vuln', 'secret']);
+  });
+
+  // Fix 3: a misspelled failOn must not advertise UNKNOWN as a valid value (it's rejected two
+  // lines later), must mention the "none" option that IS valid, and must name the input so a
+  // pipeline with several severity-shaped inputs can tell which one is wrong.
+  it('names the input and lists "none" as an option when failOn is misspelled', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', failOn: 'critcal' });
+    expect(() => readInputs()).toThrow(/"failOn"/);
+    expect(() => readInputs()).toThrow(/none, LOW, MEDIUM, HIGH, CRITICAL/);
+  });
+
+  it('names the input when an unknown severity appears in the severities list', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', severities: 'critical,bogus' });
+    expect(() => readInputs()).toThrow(/"severities"/);
+    expect(() => readInputs()).toThrow(/BOGUS/);
+  });
+
+  // Fix 4: every list/enum vocabulary in this module is lowercase, so a value that only differs
+  // in case should not be a hard failure the way an actually-unknown value is.
+  it('accepts an enum-like input case-insensitively', () => {
+    setInputs({ scanType: 'Image', target: 'app:1.4.2' });
+    expect(readInputs().scanType).toBe('image');
+  });
+
+  // Fix 5: free-text passthroughs are trimmed so a stray space from copy-pasting a pipeline
+  // variable does not surface as a confusing "not available" error two modules downstream.
+  it('trims whitespace around free-text passthrough inputs', () => {
+    setInputs({
+      scanType: 'image',
+      target: 'app:1.4.2',
+      runner: ' hardened ',
+      ignoreFile: ' .trivyignore ',
+      workingDirectory: ' services/api ',
+      targetRegistryConnection: ' conn ',
+    });
+    const inputs = readInputs();
+    expect(inputs.runner).toBe('hardened');
+    expect(inputs.ignoreFile).toBe('.trivyignore');
+    expect(inputs.workingDirectory).toBe('services/api');
+    expect(inputs.targetRegistryConnection).toBe('conn');
+  });
+
+  // `target` is deliberately NOT trimmed: unlike the free-text fields above, it is echoed
+  // verbatim in report/artifact naming elsewhere, and silently rewriting it could hide a
+  // pipeline author's mistake instead of surfacing it.
+  it('does not trim the target, since it is echoed verbatim elsewhere', () => {
+    setInputs({ scanType: 'image', target: ' app:1.4.2 ' });
+    expect(readInputs().target).toBe(' app:1.4.2 ');
+  });
+
+  it('rejects a zero or negative timeoutMinutes', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', timeoutMinutes: '0' });
+    expect(() => readInputs()).toThrow(/timeoutMinutes/);
+
+    setInputs({ scanType: 'image', target: 'app:1.4.2', timeoutMinutes: '-5' });
+    expect(() => readInputs()).toThrow(/timeoutMinutes/);
+  });
+
+  it('defaults scanType to image when the pipeline omits it', () => {
+    setInputs({ target: 'app:1.4.2' });
+    expect(readInputs().scanType).toBe('image');
+  });
+
+  it('accepts NONE as a failOn value case-insensitively', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', failOn: 'NONE' });
+    expect(readInputs().failOn).toBe('none');
   });
 });
