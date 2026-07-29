@@ -161,6 +161,17 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     runner: runnerInfo,
   });
 
+  // UNKNOWN ranks lowest and FailOn excludes it as a threshold, so any finding degraded
+  // to UNKNOWN because trivy used a severity label this task does not recognize is
+  // structurally incapable of failing the gate. That must be visible, not silent -- a
+  // future trivy release renaming or adding a label would otherwise make the gate go
+  // green with nobody the wiser.
+  if (report.unrecognizedSeverities.length > 0) {
+    publisher.warn(
+      `Trivy reported unrecognized severity label(s): ${report.unrecognizedSeverities.join(', ')}. Findings carrying them were treated as UNKNOWN severity and therefore cannot fail the gate.`,
+    );
+  }
+
   const gate = evaluateGate(report, config.failOn);
 
   publisher.printSummary(report, config.runner.alias);

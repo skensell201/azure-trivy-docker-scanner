@@ -378,6 +378,50 @@ describe('runScan', () => {
     },
   );
 
+  // ReportParser degrades an unrecognized severity label to UNKNOWN rather than
+  // throwing, since trivy's output is not our data format and one strange label is no
+  // reason to discard an otherwise-good scan. But UNKNOWN ranks lowest and FailOn
+  // excludes it as a threshold, so a finding degraded this way can never fail the gate --
+  // if a future trivy release renames a severity, the gate would go green silently
+  // unless this is surfaced.
+  it('warns when the report contains an unrecognized severity label', async () => {
+    const runner = new FakeRunner(() => {
+      fs.mkdirSync(path.join(workspace, '.trivy'), { recursive: true });
+      fs.writeFileSync(
+        path.join(workspace, '.trivy', 'report-0.json'),
+        JSON.stringify({
+          ArtifactName: 'app:1.4.2',
+          Results: [
+            {
+              Target: 'app:1.4.2',
+              Vulnerabilities: [
+                { VulnerabilityID: 'CVE-9', PkgName: 'foo', Severity: 'SUPER_CRITICAL', Title: 'x' },
+              ],
+            },
+          ],
+        }),
+      );
+    });
+
+    await invoke(runner);
+
+    expect(
+      lines.some(
+        (line) =>
+          line.includes('type=warning') &&
+          line.includes('SUPER_CRITICAL') &&
+          /unrecognized/i.test(line) &&
+          /UNKNOWN/.test(line) &&
+          /cannot fail the gate|gate/i.test(line),
+      ),
+    ).toBe(true);
+  });
+
+  it('does not warn about unrecognized severities when every label is known', async () => {
+    await invoke(new FakeRunner(writeReport));
+    expect(lines.some((line) => /unrecognized/i.test(line))).toBe(false);
+  });
+
   it('runs a second container to produce sarif when the format is requested', async () => {
     const runner = new FakeRunner(writeExtraOutput(reportBody));
     await runScan({
