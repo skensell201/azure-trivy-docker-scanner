@@ -19,10 +19,66 @@ import {
   DefaultsConfig,
   NormalizedReport,
   RunnerConfig,
+  RunnerInfo,
   TaskInputs,
 } from '../shared/types';
 
 export class ScanExecutionError extends Error {}
+
+/**
+ * Task 15b is expected to add a public `warn` method to Publisher for exactly this kind
+ * of message. Until it lands, this module cannot add one itself (Publisher.ts is owned
+ * by other in-flight work), so it detects the method at runtime and, failing that,
+ * falls back to the LineWriter Publisher already wraps internally. Reaching past
+ * Publisher's `private` modifier this way is not pretty, but it is what keeps this
+ * warning visible through whatever sink a caller gave Publisher (a test's array, a log
+ * file, ...) instead of silently going to `console.log` regardless of what the caller
+ * asked for. `console.log` remains only as a last-resort fallback if neither surface is
+ * present. Once Publisher grows `warn`, the two fallback branches simply stop firing.
+ */
+function emitVersionProbeWarning(publisher: Publisher, reason: string): void {
+  const message = `Trivy version probe failed: the report will not record the trivy version or database date. Reason: ${sanitizeForWarningLine(reason)}`;
+  const line = `##vso[task.logissue type=warning]${message}`;
+  const surface = publisher as unknown as {
+    warn?: (text: string) => void;
+    write?: (text: string) => void;
+  };
+  if (typeof surface.warn === 'function') {
+    surface.warn(message);
+    return;
+  }
+  if (typeof surface.write === 'function') {
+    surface.write(line);
+    return;
+  }
+  console.log(line);
+}
+
+/**
+ * Mirrors Publisher's own sanitizeForLogLine: `reason` comes from a caught error's
+ * message, which can originate in process stderr this task does not control, so it
+ * gets the same two defenses before reaching a `##vso[...]` log line -- a raw newline
+ * would start a second physical line, and a literal "##vso[" in that second line would
+ * be executed as a command of the error's choosing.
+ */
+function sanitizeForWarningLine(text: string): string {
+  return text
+    .replace(/\r\n|\r|\n/g, ' ')
+    .replace(/##vso\[/gi, '#-vso[')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function createDirectoryOrThrow(dirPath: string, description: string, extraGuidance: string): void {
+  try {
+    fs.mkdirSync(dirPath, { recursive: true });
+  } catch (error) {
+    const reason = (error as Error).message;
+    throw new ScanExecutionError(
+      `Could not create the ${description} at "${dirPath}": ${reason}.${extraGuidance ? ` ${extraGuidance}` : ''}`,
+    );
+  }
+}
 
 export interface RunScanArgs {
   defaults: DefaultsConfig;
@@ -51,17 +107,26 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     scanIndex: args.scanIndex,
   });
 
-  // The version probe is decoration (see ReportParser.parseVersion): its own failure
-  // must never fail the scan, so its result is not checked here at all.
-  const version = await processRunner.run('docker', buildVersionArgs(config));
-  const runnerInfo = {
-    alias: config.runner.alias,
-    image: config.runner.image,
-    ...parseVersion(version.stdout),
-  };
+  // The version probe is decoration (see ReportParser.parseVersion): a garbled response
+  // already cannot fail the scan below, and neither can the probe call itself throwing
+  // outright -- e.g. a ProcessRunner implementation that rejects instead of resolving
+  // with a non-zero exit code, which the real ChildProcessRunner never does but nothing
+  // in the ProcessRunner interface forbids. Losing the version and database date is
+  // visible (a warning), not silent, but it must never cost a scan that otherwise worked.
+  let runnerInfo: RunnerInfo = { alias: config.runner.alias, image: config.runner.image };
+  try {
+    const version = await processRunner.run('docker', buildVersionArgs(config));
+    runnerInfo = { ...runnerInfo, ...parseVersion(version.stdout) };
+  } catch (error) {
+    emitVersionProbeWarning(publisher, (error as Error).message);
+  }
 
-  fs.mkdirSync(config.cacheDir, { recursive: true });
-  fs.mkdirSync(path.join(config.sourcesDir, '.trivy'), { recursive: true });
+  createDirectoryOrThrow(
+    config.cacheDir,
+    'trivy cache directory',
+    "This path comes from the project's Trivy settings (cacheDir) - an administrator can change it there.",
+  );
+  createDirectoryOrThrow(path.join(config.sourcesDir, '.trivy'), 'report output directory', '');
 
   const envFile = writeEnvFile(
     args.agent.tempDir,

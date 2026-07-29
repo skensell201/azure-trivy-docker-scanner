@@ -57,6 +57,28 @@ const writeReport = () => {
   fs.writeFileSync(path.join(workspace, '.trivy', 'report-0.json'), reportBody);
 };
 
+/**
+ * Some environments (e.g. tests running as root, or certain CI filesystems) do not
+ * enforce a 0o555 directory mode, so a permission-denial test would fail for a reason
+ * unrelated to the code under test. Probing once up front lets the affected tests skip
+ * themselves cleanly instead of failing spuriously.
+ */
+function permissionsAreEnforced(): boolean {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'perm-probe-'));
+  fs.chmodSync(probeDir, 0o555);
+  let denied = false;
+  try {
+    fs.mkdirSync(path.join(probeDir, 'child'));
+  } catch {
+    denied = true;
+  }
+  fs.chmodSync(probeDir, 0o755);
+  fs.rmSync(probeDir, { recursive: true, force: true });
+  return denied;
+}
+
+const itIfPermissionsEnforced = permissionsAreEnforced() ? it : it.skip;
+
 beforeEach(() => {
   workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'run-'));
   fs.mkdirSync(path.join(workspace, 'temp'), { recursive: true });
@@ -178,6 +200,33 @@ describe('runScan', () => {
     expect(result.report.findings).toHaveLength(1);
   });
 
+  // The version probe is decoration: even a process runner whose probe call rejects
+  // outright (not just returns junk stdout) must not fail the scan. The report loses
+  // trivyVersion/dbUpdatedAt, and a warning is emitted so a stale/unknown database is
+  // still visible to whoever investigates, instead of being silently swallowed.
+  it('warns and completes the scan when the version probe rejects', async () => {
+    class RejectingVersionRunner implements ProcessRunner {
+      run(command: string, args: string[]): Promise<ProcessResult> {
+        if (args.includes('version')) {
+          return Promise.reject(new Error('spawn docker ENOENT'));
+        }
+        writeReport();
+        return Promise.resolve({ exitCode: 0, stdout: '', stderr: '', timedOut: false });
+      }
+    }
+
+    const result = await invoke(new RejectingVersionRunner());
+
+    expect(result.report.runner).toEqual({ alias: 'baseline', image: 'reg.corp/trivy:0.58.1' });
+    expect(result.gate.outcome).toBe('failed');
+    expect(
+      lines.some(
+        (line) =>
+          line.includes('type=warning') && /version probe/i.test(line) && line.includes('ENOENT'),
+      ),
+    ).toBe(true);
+  });
+
   // Self-review pin for scanIndex: two TrivyScan steps in the same job run
   // concurrently (Promise.all, not sequentially) against the same sourcesDir and must
   // not read or overwrite each other's report file or container name.
@@ -229,30 +278,60 @@ describe('runScan', () => {
     expect(resultB.report.findings[0].id).toBe('CVE-B');
   });
 
-  // Self-review pin for "what if the cache directory cannot be created": mkdirSync's
-  // own error is allowed to propagate unwrapped. This pins that Node's raw EACCES
-  // error still names the exact path in its message, so the build log is not left
-  // pointing at nothing -- but see the report for why this is weaker than the
-  // guidance-carrying messages the rest of this module gives on other failure paths.
-  it('names the path when the cache directory cannot be created', async () => {
-    const readonlyParent = path.join(workspace, 'readonly-parent');
-    fs.mkdirSync(readonlyParent);
-    fs.chmodSync(readonlyParent, 0o555);
-    try {
-      await expect(
-        runScan({
-          defaults,
-          runners,
-          inputs,
-          agent: { ...agent, agentHomeDir: readonlyParent },
-          scanIndex: 0,
-          processRunner: new FakeRunner(writeReport),
-          publisher: new Publisher((line) => lines.push(line)),
-          credentials: {},
-        }),
-      ).rejects.toThrow(/readonly-parent/);
-    } finally {
-      fs.chmodSync(readonlyParent, 0o755);
-    }
-  });
+  // The cache directory is the one directory-creation failure with somewhere for the
+  // user to go: it comes from the project's Trivy settings (cacheDir), so the message
+  // must point there in addition to naming the path and the underlying reason.
+  itIfPermissionsEnforced(
+    'names the cache directory, its path and the reason when it cannot be created',
+    async () => {
+      const readonlyParent = path.join(workspace, 'readonly-parent');
+      fs.mkdirSync(readonlyParent);
+      fs.chmodSync(readonlyParent, 0o555);
+      try {
+        await expect(
+          runScan({
+            defaults,
+            runners,
+            inputs,
+            agent: { ...agent, agentHomeDir: readonlyParent },
+            scanIndex: 0,
+            processRunner: new FakeRunner(writeReport),
+            publisher: new Publisher((line) => lines.push(line)),
+            credentials: {},
+          }),
+        ).rejects.toThrow(/cache directory.*readonly-parent.*EACCES.*Trivy settings/s);
+      } finally {
+        fs.chmodSync(readonlyParent, 0o755);
+      }
+    },
+  );
+
+  // The report-output directory (sourcesDir/.trivy) has no administrator setting behind
+  // it -- unlike the cache directory it is always a subdirectory of the checked-out
+  // sources -- so its message names the path and the reason but does not invent a
+  // setting to point at.
+  itIfPermissionsEnforced(
+    'names the report output directory, its path and the reason when it cannot be created',
+    async () => {
+      const readonlySources = path.join(workspace, 'readonly-sources');
+      fs.mkdirSync(readonlySources);
+      fs.chmodSync(readonlySources, 0o555);
+      try {
+        await expect(
+          runScan({
+            defaults,
+            runners,
+            inputs,
+            agent: { ...agent, sourcesDir: readonlySources },
+            scanIndex: 0,
+            processRunner: new FakeRunner(writeReport),
+            publisher: new Publisher((line) => lines.push(line)),
+            credentials: {},
+          }),
+        ).rejects.toThrow(/report output directory.*readonly-sources.*EACCES/s);
+      } finally {
+        fs.chmodSync(readonlySources, 0o755);
+      }
+    },
+  );
 });
