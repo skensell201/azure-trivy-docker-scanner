@@ -6,6 +6,21 @@ const okResponse = (value: unknown) => ({
   text: async () => JSON.stringify({ id: 'runners', value }),
 });
 
+/**
+ * Awaits a promise expected to reject and returns the rejection reason. Unlike
+ * a bare `.catch(cb)`, this fails the test (via the thrown Error) if the
+ * promise resolves instead of rejecting, so assertions inside the caller
+ * cannot be silently skipped.
+ */
+async function rejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as Error;
+  }
+  throw new Error('expected the promise to reject, but it resolved');
+}
+
 describe('ConfigClient', () => {
   it('requests the document from the extension data collection', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([{ alias: 'baseline' }]));
@@ -102,11 +117,49 @@ describe('ConfigClient', () => {
       fetch: fetchMock,
     });
 
-    await client.readDocument('runners').catch((error: Error) => {
-      expect(error).toBeInstanceOf(ConfigUnavailableError);
-      expect(error.message).toContain('x'.repeat(200));
-      expect(error.message).not.toContain('x'.repeat(201));
+    const error = await rejection(client.readDocument('runners'));
+
+    expect(error).toBeInstanceOf(ConfigUnavailableError);
+    expect(error.message).toContain('x'.repeat(200));
+    expect(error.message).not.toContain('x'.repeat(201));
+  });
+
+  it('does not split a surrogate pair when truncating the body preview at the 200-character boundary', async () => {
+    // 199 ASCII chars put the boundary exactly inside the two-code-unit emoji
+    // that follows, if truncation is done by UTF-16 code unit rather than by
+    // code point.
+    const body = `${'x'.repeat(199)}\u{1F600}${'y'.repeat(300)}`;
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => body });
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
     });
+
+    const error = await rejection(client.readDocument('runners'));
+
+    expect(error.message).toContain('\u{1F600}');
+  });
+
+  it('sanitizes control characters and neutralizes a forged ##vso logging command in the body preview', async () => {
+    const malicious = 'oops\n##vso[task.complete result=Succeeded]\nmore binary';
+    const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => malicious });
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    const error = await rejection(client.readDocument('runners'));
+
+    expect(error).toBeInstanceOf(ConfigUnavailableError);
+    expect(error.message).toContain('oops');
+    expect(error.message).not.toContain('##vso[');
+    expect(error.message).not.toMatch(/[\n\r]/);
   });
 
   it('rejects a 200 response whose document has no value field, rather than treating it as unconfigured', async () => {
@@ -230,5 +283,132 @@ describe('ConfigClient', () => {
     await expect(client.readDocument('runners')).rejects.toThrow(ConfigUnavailableError);
     await expect(client.readDocument('runners')).rejects.toThrow(/System\.CollectionUri/);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('encodes publisher and extensionId before interpolating them into the URL', async () => {
+    const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'ik software',
+      extensionId: 'trivy/scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    await client.readDocument('runners');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain(
+      `/InstalledExtensions/${encodeURIComponent('ik software')}/${encodeURIComponent('trivy/scanner')}/Data/`,
+    );
+  });
+
+  it('does not leak collectionUri userinfo into a transport-failure message, but still sends it to fetch', async () => {
+    const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const client = new ConfigClient({
+      collectionUri: 'https://user:s3cr3t@ado.corp/DC',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    const error = await rejection(client.readDocument('runners'));
+
+    expect(error).toBeInstanceOf(ConfigUnavailableError);
+    expect(error.message).not.toContain('s3cr3t');
+    expect(error.message).toContain('https://ado.corp/DC');
+    // The request itself still needs the credentials to reach the server;
+    // only messages surfaced to the reader are redacted.
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('user:s3cr3t@ado.corp');
+  });
+
+  it('does not leak userinfo into the invalid-collectionUri message either', async () => {
+    const client = new ConfigClient({
+      collectionUri: 'ftp://user:s3cr3t@ado.corp/DC',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: jest.fn(),
+    });
+
+    const error = await rejection(client.readDocument('runners'));
+
+    expect(error).toBeInstanceOf(ConfigUnavailableError);
+    expect(error.message).toContain('System.CollectionUri');
+    expect(error.message).not.toContain('s3cr3t');
+  });
+
+  it('logs which document was missing and at which URL when a 404 causes the undefined fallback', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 404, text: async () => '' });
+    const log = jest.fn();
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+      log,
+    });
+
+    await expect(client.readDocument('runners')).resolves.toBeUndefined();
+
+    expect(log).toHaveBeenCalledTimes(1);
+    const [message] = log.mock.calls[0];
+    expect(message).toContain('runners');
+    expect(message).toContain(
+      'https://ado.corp/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner',
+    );
+  });
+
+  it('does not require a log callback', async () => {
+    // The callback is optional: callers that do not care about diagnosing a
+    // missing document (or have not been updated yet) must not crash.
+    const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 404, text: async () => '' });
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    await expect(client.readDocument('runners')).resolves.toBeUndefined();
+  });
+
+  it('resolves to null (not undefined) when the document value field is explicitly null', async () => {
+    // JSON.parse('{"value":null}').value is `null`, not `undefined`; the
+    // return type says so explicitly rather than silently widening it away.
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ id: 'runners', value: null }) });
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    await expect(client.readDocument('runners')).resolves.toBeNull();
+  });
+
+  it('wraps a rejecting response.text() as ConfigUnavailableError, not a raw error', async () => {
+    const fetchMock = jest
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, text: () => Promise.reject(new Error('stream closed')) });
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    const error = await rejection(client.readDocument('runners'));
+
+    expect(error).toBeInstanceOf(ConfigUnavailableError);
+    expect(error.message).toContain('stream closed');
   });
 });

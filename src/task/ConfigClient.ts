@@ -21,6 +21,13 @@ export interface ConfigClientOptions {
   extensionId: string;
   auth: { mode: AuthMode; token: string };
   fetch: FetchLike;
+  /**
+   * Optional informational logging hook. Invoked (at most once per call) when
+   * a 404 causes readDocument to fall back to undefined, so a mistyped
+   * publisher/extensionId or an administrator who never saved the document
+   * leaves a trace instead of silently degrading to defaults.
+   */
+  log?: (message: string) => void;
 }
 
 const API_VERSION = '3.2-preview.1';
@@ -35,16 +42,43 @@ function hasValueField(parsed: unknown): parsed is { value: unknown } {
 }
 
 /**
+ * Strips `user:pass@` userinfo from the front of a URL before it is ever put
+ * in a message shown to a human (log line or thrown error). The credentials
+ * are still sent to `fetch` untouched - only messages are redacted.
+ */
+function redactUserinfo(url: string): string {
+  return url.replace(/^(\w+:\/\/)[^/@]*@/i, '$1');
+}
+
+/**
+ * Builds a diagnostic preview of a response body that is safe to interpolate
+ * into a message which may end up echoed to a pipeline console:
+ * - cut by Unicode code point (not UTF-16 code unit), so a surrogate pair
+ *   straddling the cut is never split into a lone, invalid surrogate;
+ * - control characters (including raw newlines/CR and NUL) collapsed to
+ *   spaces, so the body cannot inject fake log lines or corrupt the terminal;
+ * - the Azure Pipelines "##vso[" logging-command marker broken up, so a
+ *   response body cannot forge a pipeline command when this message is later
+ *   logged.
+ */
+function previewBody(body: string): string {
+  const truncated = Array.from(body).slice(0, BODY_PREVIEW_LENGTH).join('');
+  // eslint-disable-next-line no-control-regex -- deliberately matching C0/DEL control characters
+  const withoutControlChars = truncated.replace(/[\x00-\x1f\x7f]/g, ' ');
+  return withoutControlChars.replace(/##vso\[/gi, '# #vso[');
+}
+
+/**
  * Reads administrator-maintained settings documents (runner catalog, global
  * defaults) from the Azure DevOps Extension Data Service.
  */
 export class ConfigClient {
   constructor(private readonly options: ConfigClientOptions) {}
 
-  async readDocument<T>(documentId: string): Promise<T | undefined> {
+  async readDocument<T>(documentId: string): Promise<T | null | undefined> {
     const base = this.validatedBase();
     const url =
-      `${base}/_apis/ExtensionManagement/InstalledExtensions/${this.options.publisher}/${this.options.extensionId}` +
+      `${base}/_apis/ExtensionManagement/InstalledExtensions/${encodeURIComponent(this.options.publisher)}/${encodeURIComponent(this.options.extensionId)}` +
       // %24settings is the URL-encoded literal collection name `$settings`
       // used by the Extension Data Service; not a bug.
       `/Data/Scopes/Default/Current/Collections/%24settings/Documents/${encodeURIComponent(documentId)}?api-version=${API_VERSION}`;
@@ -54,12 +88,17 @@ export class ConfigClient {
       response = await this.options.fetch(url, { headers: { Authorization: this.authHeader() } });
     } catch (error) {
       throw new ConfigUnavailableError(
-        `Could not reach ${base} to read the "${documentId}" settings document: ${(error as Error).message}`,
+        `Could not reach ${redactUserinfo(base)} to read the "${documentId}" settings document: ${(error as Error).message}`,
       );
     }
 
     if (response.status === 404) {
-      // The administrator has not saved this document yet; that is not an error.
+      // The administrator has not saved this document yet; that is not an error,
+      // but it is indistinguishable from a mistyped publisher/extensionId
+      // without a trace, so log it rather than fail silently.
+      this.options.log?.(
+        `Settings document "${documentId}" was not found at ${redactUserinfo(url)}; continuing without it.`,
+      );
       return undefined;
     }
 
@@ -70,14 +109,16 @@ export class ConfigClient {
       );
     }
 
-    const body = await response.text();
+    let body: string | undefined;
     let parsed: unknown;
     try {
+      body = await response.text();
       parsed = JSON.parse(body);
-    } catch {
+    } catch (error) {
       throw new ConfigUnavailableError(
-        `The "${documentId}" settings document did not return valid JSON ` +
-          `(got: ${body.slice(0, BODY_PREVIEW_LENGTH)}).`,
+        body === undefined
+          ? `Reading the "${documentId}" settings document response failed: ${(error as Error).message}`
+          : `The "${documentId}" settings document did not return valid JSON (got: ${previewBody(body)}).`,
       );
     }
 
@@ -85,7 +126,7 @@ export class ConfigClient {
       throw new ConfigUnavailableError(`The "${documentId}" settings document response had no "value" field.`);
     }
 
-    return parsed.value as T;
+    return parsed.value as T | null;
   }
 
   /**
@@ -98,7 +139,7 @@ export class ConfigClient {
     const base = this.options.collectionUri.replace(/\/+$/, '');
     if (!/^https?:\/\/.+/i.test(base)) {
       throw new ConfigUnavailableError(
-        `System.CollectionUri is not set to a valid http(s) URL (got: "${this.options.collectionUri}").`,
+        `System.CollectionUri is not set to a valid http(s) URL (got: "${redactUserinfo(this.options.collectionUri)}").`,
       );
     }
     return base;
