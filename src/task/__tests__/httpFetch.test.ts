@@ -1,4 +1,5 @@
 import * as http from 'http';
+import * as net from 'net';
 import * as zlib from 'zlib';
 import { AddressInfo } from 'net';
 import { httpFetch } from '../httpFetch';
@@ -86,5 +87,70 @@ describe('httpFetch', () => {
     await expect(
       httpFetch('http://127.0.0.1:1/doc', { headers: { Authorization: secret } }),
     ).rejects.not.toMatchObject({ message: expect.stringContaining(secret) });
+  });
+
+  describe('timeout', () => {
+    // Without a watchdog, a settings endpoint that hangs leaves the promise pending forever and
+    // the build sits until the agent's own job timeout kills it with no useful explanation. Both
+    // servers below use a raw `net.createServer` rather than `http.createServer`: an http server
+    // always answers something once it decides to handle a request, so a raw socket that simply
+    // never writes is the only reliable way to simulate "accepted, then silence".
+
+    it('rejects when the server accepts the connection but never responds', async () => {
+      const stuckServer = net.createServer(() => {
+        // Accept the TCP connection and do nothing: no bytes, ever.
+      });
+      await new Promise<void>((resolve) => stuckServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (stuckServer.address() as AddressInfo).port;
+
+      try {
+        await expect(
+          httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, 50),
+        ).rejects.toThrow(/timed out/i);
+      } finally {
+        stuckServer.close();
+      }
+    });
+
+    it('rejects when headers and part of the body arrive but the rest never does', async () => {
+      const stuckServer = net.createServer((socket) => {
+        socket.write(
+          'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n',
+        );
+        socket.write('{"partial":true');
+        // Then nothing further, ever: Content-Length promised 100 bytes, only ~16 arrive.
+      });
+      await new Promise<void>((resolve) => stuckServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (stuckServer.address() as AddressInfo).port;
+
+      try {
+        await expect(
+          httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, 50),
+        ).rejects.toThrow(/timed out/i);
+      } finally {
+        stuckServer.close();
+      }
+    });
+
+    it('names the URL in the timeout message without leaking headers', async () => {
+      const stuckServer = net.createServer(() => {
+        // Accept and never respond.
+      });
+      await new Promise<void>((resolve) => stuckServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (stuckServer.address() as AddressInfo).port;
+      const url = `http://127.0.0.1:${port}/doc`;
+      const secret = 'Bearer super-secret-token-xyz';
+
+      try {
+        await expect(
+          httpFetch(url, { headers: { Authorization: secret } }, 50),
+        ).rejects.toThrow(new RegExp(`${port}.*timed out`));
+        await expect(
+          httpFetch(url, { headers: { Authorization: secret } }, 50),
+        ).rejects.not.toMatchObject({ message: expect.stringContaining(secret) });
+      } finally {
+        stuckServer.close();
+      }
+    });
   });
 });
