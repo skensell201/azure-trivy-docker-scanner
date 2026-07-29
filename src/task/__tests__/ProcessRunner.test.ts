@@ -60,4 +60,16 @@ describe('ChildProcessRunner', () => {
     });
     expect(result.exitCode).toBe(124);
   });
+
+  // A child that exits before reading stdin makes the write fail with EPIPE. Without
+  // an error listener on child.stdin this throws synchronously and crashes the whole
+  // process (not just this run() call) -- exactly the risk for a later `docker login
+  // --password-stdin` caller if docker exits before consuming the piped password.
+  it('resolves normally instead of crashing when the child exits before reading a large stdin payload', async () => {
+    const payload = 'x'.repeat(2 * 1024 * 1024); // 2MB, well past the OS pipe buffer
+    const result = await runner.run(process.execPath, ['-e', 'process.exit(0)'], {
+      stdin: payload,
+    });
+    expect(result.exitCode).toBe(0);
+  });
 });

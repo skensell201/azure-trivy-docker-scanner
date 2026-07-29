@@ -33,6 +33,9 @@ export class ChildProcessRunner implements ProcessRunner {
           }, options.timeoutMs)
         : undefined;
 
+      // captured stdout/stderr are complete only if the child flushes before it exits:
+      // 'close' (unlike 'exit') waits for the stdio streams to end, but it cannot pull
+      // data out of a pipe the child itself never wrote before calling process.exit().
       child.stdout.on('data', (chunk: Buffer) => {
         const text = chunk.toString();
         stdout += text;
@@ -40,6 +43,16 @@ export class ChildProcessRunner implements ProcessRunner {
       });
       child.stderr.on('data', (chunk: Buffer) => {
         stderr += chunk.toString();
+      });
+
+      // A child that exits before reading stdin makes the write fail with EPIPE.
+      // Without this listener, the 'error' event on an EventEmitter with no listener
+      // throws synchronously and crashes the whole task process, not just this run() --
+      // exactly what would happen if `docker login --password-stdin` exited early.
+      child.stdin.on('error', (error: NodeJS.ErrnoException) => {
+        if (!isExpectedStdinError(error)) {
+          stderr += error.message;
+        }
       });
 
       child.on('error', (error: Error) => {
@@ -52,9 +65,25 @@ export class ChildProcessRunner implements ProcessRunner {
         resolve({ exitCode: code ?? (timedOut ? 124 : 1), stdout, stderr, timedOut });
       });
 
-      if (options.stdin !== undefined) {
-        child.stdin.end(options.stdin);
+      if (options.stdin !== undefined && !child.stdin.destroyed) {
+        try {
+          child.stdin.end(options.stdin);
+        } catch (error) {
+          if (!isExpectedStdinError(error as NodeJS.ErrnoException)) {
+            stderr += (error as Error).message;
+          }
+        }
       }
     });
   }
+}
+
+/**
+ * EPIPE and ERR_STREAM_DESTROYED are the expected shape of "the child exited before
+ * reading its input" -- the process's own exit code and stderr already describe what
+ * happened, so these are not reported again. Anything else is a genuine stdin failure
+ * and must reach the caller instead of vanishing.
+ */
+function isExpectedStdinError(error: NodeJS.ErrnoException): boolean {
+  return error.code === 'EPIPE' || error.code === 'ERR_STREAM_DESTROYED';
 }
