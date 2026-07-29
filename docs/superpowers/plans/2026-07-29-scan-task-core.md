@@ -51,7 +51,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "test": "jest",
     "lint": "eslint src --ext .ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
@@ -74,7 +74,9 @@
 }
 ```
 
-- [ ] **Step 2: Создать `tsconfig.json`**
+- [ ] **Step 2: Создать `tsconfig.json` и `tsconfig.build.json`**
+
+`tsconfig.json` покрывает всё, включая тесты, — иначе `npm run typecheck` молча пропускает тестовый код:
 
 ```json
 {
@@ -91,8 +93,21 @@
     "declaration": false,
     "sourceMap": true
   },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
+```
+
+`tsconfig.build.json` используется только для компиляции и выкидывает тесты из выпуска:
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "rootDir": "src"
+  },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/__tests__/**"]
+  "exclude": ["src/**/__tests__/**", "test/**"]
 }
 ```
 
@@ -447,6 +462,23 @@ Expected: PASS, 5 тестов.
 git add src/shared/types.ts src/shared/severity.ts src/shared/__tests__/severity.test.ts
 git commit -m "feat: shared config types and severity helpers"
 ```
+
+- [ ] **Step 7: Ужесточить словарь severity (по итогам ревью)**
+
+`indexOf` возвращает `-1` для значения вне союза, из-за чего `failOn: "critical"` в нижнем регистре сортируется ниже `UNKNOWN` и делает блокирующей любую находку. Ни `validation.ts`, ни `ConfigClient` значение `failOn` не проверяют, так что попасть туда мусор может. Поэтому:
+
+- `SEVERITY_ORDER` объявляется как `readonly Severity[]` (в `isSeverity` внутренний каст становится `as readonly string[]`);
+- добавляется `severityRank(value: Severity): number`, который бросает исключение на неизвестном значении; через него идут `compareSeverity` и `isAtLeast`;
+- добавляется `parseSeverity(raw: string): Severity` — тримит, приводит к верхнему регистру, бросает на пустой строке и на неизвестном значении;
+- `parseSeverityList` разбирает элементы через `parseSeverity` и бросает, если не получилось ни одного значения (иначе `--severity ''` уходит в trivy).
+
+Тесты: бросок `severityRank` на неизвестном значении, бросок `isAtLeast` на неизвестном пороге, `parseSeverity` на ' high ' и на пустой строке, отказ `parseSeverityList` на `''` и `' ,, '`, регистрозависимость `isSeverity`, и вместо повтора литерала — проверка, что `emptySeverityCounts()` возвращает свежий объект (его мутирует `ReportParser`).
+
+- [ ] **Step 8: Именованные типы счётчиков и `findingKind.ts`**
+
+В `types.ts` добавляются `export type SeverityCounts = Record<Severity, number>` и `export type KindCounts = Record<FindingKind, number>`, которые используются в `NormalizedReport`. Рядом создаётся `src/shared/findingKind.ts` с `FINDING_KINDS: readonly FindingKind[]` и `emptyKindCounts(): KindCounts` плюс тест на нулевые значения и свежесть объекта — иначе этот литерал дублируется в `ReportParser` и во вкладке результатов.
+
+Док-комментарии в `types.ts` пишутся по-английски (файл читают оба UI-плана) и покрывают только неочевидное: `enabled` (отсутствие означает «включён»), `allowOverrides` (отсутствие — можно переопределять всё, пустой массив — ничего), `schemaVersion`, `artifactName` против `target`, `scanIndex`, неуникальность `Finding.id`, нестабильный формат `Finding.location`.
 
 ---
 
@@ -1710,15 +1742,9 @@ Expected: FAIL — `Cannot find module '../ReportParser'`.
 - [ ] **Step 7: Реализовать `src/task/ReportParser.ts`**
 
 ```ts
+import { emptyKindCounts } from '../shared/findingKind';
 import { emptySeverityCounts, isSeverity } from '../shared/severity';
-import {
-  Finding,
-  FindingKind,
-  NormalizedReport,
-  RunnerInfo,
-  ScanType,
-  Severity,
-} from '../shared/types';
+import { Finding, NormalizedReport, RunnerInfo, ScanType, Severity } from '../shared/types';
 
 export class TrivyReportParseError extends Error {}
 
@@ -1844,12 +1870,7 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
   }
 
   const counts = emptySeverityCounts();
-  const kindCounts: Record<FindingKind, number> = {
-    vulnerability: 0,
-    secret: 0,
-    misconfiguration: 0,
-    license: 0,
-  };
+  const kindCounts = emptyKindCounts();
 
   for (const finding of findings) {
     counts[finding.severity] += 1;
@@ -2580,14 +2601,13 @@ Expected: FAIL — `Cannot find module '../inputs'`.
 
 ```ts
 import * as tl from 'azure-pipelines-task-lib/task';
-import { parseSeverityList } from '../shared/severity';
+import { parseSeverity, parseSeverityList } from '../shared/severity';
 import {
   FailOn,
   OutputFormat,
   SbomFormat,
   Scanner,
   ScanType,
-  Severity,
   TaskInputs,
 } from '../shared/types';
 
@@ -2641,10 +2661,7 @@ export function readInputs(): TaskInputs {
 
   let failOn: FailOn | undefined;
   if (failOnRaw !== undefined) {
-    failOn =
-      failOnRaw.trim().toLowerCase() === 'none'
-        ? 'none'
-        : (parseSeverityList(failOnRaw)[0] as Severity);
+    failOn = failOnRaw.trim().toLowerCase() === 'none' ? 'none' : parseSeverity(failOnRaw);
   }
 
   return {

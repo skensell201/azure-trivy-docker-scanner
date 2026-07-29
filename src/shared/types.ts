@@ -6,6 +6,9 @@ export type OutputFormat = 'table' | 'json' | 'sarif';
 export type SbomFormat = 'off' | 'cyclonedx' | 'spdx-json';
 export type FindingKind = 'vulnerability' | 'secret' | 'misconfiguration' | 'license';
 
+export type SeverityCounts = Record<Severity, number>;
+export type KindCounts = Record<FindingKind, number>;
+
 export type OverridableField =
   | 'runner'
   | 'severities'
@@ -23,6 +26,7 @@ export interface RunnerConfig {
   registryConnection?: string;
   extraDockerArgs?: string;
   isDefault?: boolean;
+  /** Omitted means enabled. */
   enabled?: boolean;
 }
 
@@ -37,6 +41,10 @@ export interface DefaultsConfig {
   failOn?: FailOn;
   ignoreUnfixed?: boolean;
   timeoutMinutes?: number;
+  /**
+   * Omitted means every overridable field may be overridden by a task input;
+   * an empty array means none may be. These are opposite meanings.
+   */
   allowOverrides?: OverridableField[];
 }
 
@@ -60,7 +68,7 @@ export interface TaskInputs {
   workingDirectory?: string;
 }
 
-/** Окружение агента, известное только в рантайме таска. */
+/** The agent's runtime environment, known only once the task executes. */
 export interface AgentContext {
   sourcesDir: string;
   agentHomeDir: string;
@@ -68,7 +76,7 @@ export interface AgentContext {
   buildId: string;
 }
 
-/** Полностью определённая конфигурация одного запуска. Опциональны только реально необязательные поля. */
+/** Fully resolved configuration for a single run. Only genuinely optional fields remain optional. */
 export interface ResolvedScanConfig {
   runner: RunnerConfig;
   scanType: ScanType;
@@ -91,18 +99,21 @@ export interface ResolvedScanConfig {
   publishArtifact: boolean;
   extraTrivyArgs?: string;
   buildId: string;
+  /** Distinguishes several task instances in one job so their containers and report files do not collide. */
   scanIndex: number;
 }
 
 export interface Finding {
   kind: FindingKind;
   severity: Severity;
+  /** Not unique within a report; the same CVE recurs once per affected target. */
   id: string;
   title: string;
   target: string;
   pkgName?: string;
   installedVersion?: string;
   fixedVersion?: string;
+  /** Display only; the format is not stable enough to parse. */
   location?: string;
 }
 
@@ -114,13 +125,15 @@ export interface RunnerInfo {
 }
 
 export interface NormalizedReport {
+  /** Literal version of this normalized format, written by the task and read by the results tab. */
   schemaVersion: 1;
   scanType: ScanType;
   target: string;
+  /** What Trivy reported it scanned, which can differ from the requested `target`. */
   artifactName: string;
   createdAt?: string;
   runner: RunnerInfo;
   findings: Finding[];
-  counts: Record<Severity, number>;
-  kindCounts: Record<FindingKind, number>;
+  counts: SeverityCounts;
+  kindCounts: KindCounts;
 }
