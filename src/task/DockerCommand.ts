@@ -66,8 +66,11 @@ function assertNoReservedTrivyFlags(tokens: readonly string[]): void {
   }
 }
 
-export function containerName(config: ResolvedScanConfig): string {
-  return `trivyscan-${config.buildId}-${config.scanIndex}`;
+/** SARIF and, separately, SBOM (cyclonedx or spdx-json) are extra runs of the same runner image. */
+export type ExtraFormat = 'sarif' | 'cyclonedx' | 'spdx-json';
+
+export function containerName(config: ResolvedScanConfig, suffix = ''): string {
+  return `trivyscan-${config.buildId}-${config.scanIndex}${suffix ? `-${suffix}` : ''}`;
 }
 
 export function containerReportPath(config: ResolvedScanConfig): string {
@@ -76,6 +79,21 @@ export function containerReportPath(config: ResolvedScanConfig): string {
 
 export function hostReportPath(config: ResolvedScanConfig): string {
   return path.posix.join(config.sourcesDir, '.trivy', `report-${config.scanIndex}.json`);
+}
+
+/** sarif keeps the "report" name (it is one more shape of the same report); cyclonedx and
+ * spdx-json share the "sbom" name since generateSbom is a single field - only one of them
+ * ever runs for a given scan, so there is no naming collision to worry about between them. */
+function extraFileName(format: ExtraFormat, scanIndex: number): string {
+  return format === 'sarif' ? `report-${scanIndex}.sarif` : `sbom-${scanIndex}.json`;
+}
+
+function containerExtraPath(config: ResolvedScanConfig, format: ExtraFormat): string {
+  return `${WORKSPACE}/.trivy/${extraFileName(format, config.scanIndex)}`;
+}
+
+export function hostExtraPath(config: ResolvedScanConfig, format: ExtraFormat): string {
+  return path.posix.join(config.sourcesDir, '.trivy', extraFileName(format, config.scanIndex));
 }
 
 /**
@@ -102,6 +120,39 @@ function resolveWithinWorkspace(
 }
 
 export function buildScanArgs(config: ResolvedScanConfig, envFilePath: string): string[] {
+  return buildArgs(config, envFilePath, 'json', containerReportPath(config), '');
+}
+
+/**
+ * SARIF and SBOM are additional runs of the same runner image against the same target,
+ * differing only in --format/--output and in the container name suffix that keeps them
+ * from clashing with the JSON scan or each other. Going through buildArgs means every
+ * protection the JSON run gets - the reserved-flag check, the workspace-escape checks on
+ * workingDirectory/ignoreFile, and the re-assertion of --format/--output/--exit-code
+ * after extraTrivyArgs - applies here too, parameterized on this run's own format and
+ * output path rather than a hardcoded 'json'.
+ */
+export function buildFormatArgs(
+  config: ResolvedScanConfig,
+  envFilePath: string,
+  format: ExtraFormat,
+): string[] {
+  return buildArgs(
+    config,
+    envFilePath,
+    format,
+    containerExtraPath(config, format),
+    format === 'sarif' ? 'sarif' : 'sbom',
+  );
+}
+
+function buildArgs(
+  config: ResolvedScanConfig,
+  envFilePath: string,
+  format: string,
+  containerOutput: string,
+  nameSuffix: string,
+): string[] {
   const extraTrivyTokens = splitArgs(config.extraTrivyArgs);
   assertNoReservedTrivyFlags(extraTrivyTokens);
 
@@ -109,7 +160,7 @@ export function buildScanArgs(config: ResolvedScanConfig, envFilePath: string): 
     'run',
     '--rm',
     '--name',
-    containerName(config),
+    containerName(config, nameSuffix),
     '--env-file',
     envFilePath,
     '-v',
@@ -136,9 +187,9 @@ export function buildScanArgs(config: ResolvedScanConfig, envFilePath: string): 
   const trivy = [
     config.scanType,
     '--format',
-    'json',
+    format,
     '--output',
-    containerReportPath(config),
+    containerOutput,
     '--exit-code',
     '0',
     '--severity',
@@ -167,14 +218,16 @@ export function buildScanArgs(config: ResolvedScanConfig, envFilePath: string): 
     ...extraTrivyTokens,
     // Re-assert after extraTrivyArgs: on a cobra CLI the last occurrence of a
     // scalar flag wins, so whatever the pipeline wrote must not be allowed to
-    // win over the flags the parser and the gate depend on.
+    // win over the flags the parser and the gate depend on. Uses this run's own
+    // format/containerOutput, not a literal - a SARIF run re-asserts sarif and its
+    // own output path, not json's.
     // RESERVED_TRIVY_FLAGS above should make this unreachable in practice -
     // this is the actual enforcement, and the reserved-flag check is the
     // friendlier error message standing in front of it.
     '--format',
-    'json',
+    format,
     '--output',
-    containerReportPath(config),
+    containerOutput,
     '--exit-code',
     '0',
     config.target,

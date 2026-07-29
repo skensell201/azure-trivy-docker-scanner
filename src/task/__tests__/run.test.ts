@@ -10,7 +10,7 @@ class FakeRunner implements ProcessRunner {
   calls: { command: string; args: string[]; options?: RunOptions }[] = [];
   results: ProcessResult[] = [];
 
-  constructor(private readonly onScan?: () => void) {}
+  constructor(private readonly onScan?: (args: string[]) => void) {}
 
   run(command: string, args: string[], options?: RunOptions): Promise<ProcessResult> {
     this.calls.push({ command, args, options });
@@ -22,7 +22,7 @@ class FakeRunner implements ProcessRunner {
         timedOut: false,
       });
     }
-    this.onScan?.();
+    this.onScan?.(args);
     return Promise.resolve(
       this.results.shift() ?? { exitCode: 0, stdout: '', stderr: '', timedOut: false },
     );
@@ -55,6 +55,23 @@ const reportBody = JSON.stringify({
 const writeReport = () => {
   fs.mkdirSync(path.join(workspace, '.trivy'), { recursive: true });
   fs.writeFileSync(path.join(workspace, '.trivy', 'report-0.json'), reportBody);
+};
+
+/**
+ * Stands in for a runner image that actually writes whatever `--output` it was given:
+ * unlike `writeReport`, it inspects each invocation's args instead of always writing
+ * report-0.json, so it works for the JSON scan and for a sarif/sbom extra run alike --
+ * each one gets a file at its own container path, mapped onto the host workspace.
+ */
+const writeExtraOutput = (content: string) => (args: string[]) => {
+  const outputIndex = args.indexOf('--output');
+  if (outputIndex === -1) {
+    return;
+  }
+  const containerPath = args[outputIndex + 1];
+  const hostPath = path.join(workspace, containerPath.replace('/workspace/', ''));
+  fs.mkdirSync(path.dirname(hostPath), { recursive: true });
+  fs.writeFileSync(hostPath, content);
 };
 
 /**
@@ -334,4 +351,106 @@ describe('runScan', () => {
       }
     },
   );
+
+  it('runs a second container to produce sarif when the format is requested', async () => {
+    const runner = new FakeRunner(writeExtraOutput(reportBody));
+    await runScan({
+      defaults,
+      runners,
+      inputs: { ...inputs, formats: ['json', 'sarif'] },
+      agent,
+      scanIndex: 0,
+      processRunner: runner,
+      publisher: new Publisher((line) => lines.push(line)),
+      credentials: {},
+    });
+    expect(runner.calls.filter((call) => call.args.includes('sarif'))).toHaveLength(1);
+    expect(lines.some((line) => line.includes('CodeAnalysisLogs'))).toBe(true);
+  });
+
+  it('runs a second container to produce an sbom when asked', async () => {
+    const runner = new FakeRunner(writeExtraOutput(reportBody));
+    await runScan({
+      defaults,
+      runners,
+      inputs: { ...inputs, generateSbom: 'cyclonedx' },
+      agent,
+      scanIndex: 0,
+      processRunner: runner,
+      publisher: new Publisher((line) => lines.push(line)),
+      credentials: {},
+    });
+    expect(runner.calls.filter((call) => call.args.includes('cyclonedx'))).toHaveLength(1);
+    expect(lines.some((line) => line.includes('TrivySBOM'))).toBe(true);
+  });
+
+  it('warns but does not fail the scan when the sarif run fails', async () => {
+    const runner = new FakeRunner(writeExtraOutput(reportBody));
+    runner.results = [
+      { exitCode: 0, stdout: '', stderr: '', timedOut: false },
+      { exitCode: 1, stdout: '', stderr: 'sarif template missing', timedOut: false },
+    ];
+    const result = await runScan({
+      defaults,
+      runners,
+      inputs: { ...inputs, formats: ['json', 'sarif'] },
+      agent,
+      scanIndex: 0,
+      processRunner: runner,
+      publisher: new Publisher((line) => lines.push(line)),
+      credentials: {},
+    });
+    expect(result.gate.outcome).toBe('failed');
+    expect(lines.some((line) => line.includes('type=warning'))).toBe(true);
+  });
+
+  // Self-review pin: the sarif/sbom runs must reuse the exact env file the JSON scan
+  // wrote (same registry credentials, same TRIVY_* vars), and it must still be removed
+  // exactly once -- not once per docker invocation, and not leaked because an extra
+  // run happened after the "normal" cleanup point.
+  it('reuses the same env file for an extra-format run and removes it exactly once', async () => {
+    const runner = new FakeRunner(writeExtraOutput(reportBody));
+    await runScan({
+      defaults,
+      runners,
+      inputs: { ...inputs, formats: ['json', 'sarif'] },
+      agent,
+      scanIndex: 0,
+      processRunner: runner,
+      publisher: new Publisher((line) => lines.push(line)),
+      credentials: {},
+    });
+
+    const envFileArgs = runner.calls
+      .filter((call) => call.args.includes('--env-file'))
+      .map((call) => call.args[call.args.indexOf('--env-file') + 1]);
+    expect(envFileArgs).toHaveLength(2);
+    expect(new Set(envFileArgs).size).toBe(1);
+    expect(fs.readdirSync(path.join(workspace, 'temp'))).toEqual([]);
+  });
+
+  // Self-review pin: when both a sarif and an sbom run are requested for the same
+  // scan, they must not clash with each other or with the main scan on container name
+  // or output path -- three docker invocations, three distinct names.
+  it('gives the scan, the sarif run and the sbom run distinct container names', async () => {
+    const runner = new FakeRunner(writeExtraOutput(reportBody));
+    await runScan({
+      defaults,
+      runners,
+      inputs: { ...inputs, formats: ['json', 'sarif'], generateSbom: 'cyclonedx' },
+      agent,
+      scanIndex: 0,
+      processRunner: runner,
+      publisher: new Publisher((line) => lines.push(line)),
+      credentials: {},
+    });
+
+    const names = runner.calls
+      .filter((call) => call.args.includes('--name'))
+      .map((call) => call.args[call.args.indexOf('--name') + 1]);
+    expect(names).toEqual(
+      expect.arrayContaining(['trivyscan-1042-0', 'trivyscan-1042-0-sarif', 'trivyscan-1042-0-sbom']),
+    );
+    expect(new Set(names).size).toBe(names.length);
+  });
 });

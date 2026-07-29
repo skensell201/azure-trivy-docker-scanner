@@ -1,8 +1,10 @@
 import {
+  buildFormatArgs,
   buildScanArgs,
   buildVersionArgs,
   buildTrivyEnv,
   containerReportPath,
+  hostExtraPath,
   hostReportPath,
   RESERVED_TRIVY_FLAGS,
 } from '../DockerCommand';
@@ -306,5 +308,83 @@ describe('report paths', () => {
     expect(hostReportPath(config({ scanIndex: 1 }))).toBe(
       '/agent/_work/1/s/.trivy/report-1.json',
     );
+  });
+});
+
+describe('buildFormatArgs', () => {
+  it('reuses the scan command with a different format and output', () => {
+    const args = buildFormatArgs(config(), '/tmp/e', 'sarif');
+    expect(args.slice(args.indexOf('--format'), args.indexOf('--format') + 2)).toEqual([
+      '--format',
+      'sarif',
+    ]);
+    expect(args).toContain('/workspace/.trivy/report-0.sarif');
+    expect(args[args.length - 1]).toBe('app:1.4.2');
+  });
+
+  it('gives the extra run its own container name so it cannot clash with the scan', () => {
+    const args = buildFormatArgs(config(), '/tmp/e', 'sarif');
+    expect(args).toContain('trivyscan-1042-0-sarif');
+    expect(args).not.toContain('trivyscan-1042-0');
+  });
+
+  it('names the sbom output after the sbom format and gives it a container name distinct from sarif', () => {
+    const cyclonedx = buildFormatArgs(config(), '/tmp/e', 'cyclonedx');
+    expect(cyclonedx).toContain('/workspace/.trivy/sbom-0.json');
+    expect(cyclonedx).toContain('trivyscan-1042-0-sbom');
+
+    const spdx = buildFormatArgs(config(), '/tmp/e', 'spdx-json');
+    expect(spdx).toContain('/workspace/.trivy/sbom-0.json');
+    expect(spdx[spdx.indexOf('--format') + 1]).toBe('spdx-json');
+  });
+
+  it('maps extra outputs onto host paths', () => {
+    expect(hostExtraPath(config(), 'sarif')).toBe('/agent/_work/1/s/.trivy/report-0.sarif');
+    expect(hostExtraPath(config(), 'spdx-json')).toBe('/agent/_work/1/s/.trivy/sbom-0.json');
+  });
+
+  it('gives an extra run for a different scanIndex its own container name and output file', () => {
+    const args = buildFormatArgs(config({ scanIndex: 3 }), '/tmp/e', 'sarif');
+    expect(args).toContain('trivyscan-1042-3-sarif');
+    expect(args).toContain('/workspace/.trivy/report-3.sarif');
+  });
+
+  // The plan's illustrative snippet re-asserts a hardcoded '--format json' after
+  // extraTrivyArgs; that would be wrong for an extra-format run, which must re-assert
+  // its OWN format and output. This pins that buildFormatArgs shares the real
+  // enforcement, parameterized correctly, rather than copying buildScanArgs's literal.
+  it("re-asserts its own format and output after extraTrivyArgs, not a hardcoded 'json'", () => {
+    const args = buildFormatArgs(config({ extraTrivyArgs: '--offline-scan' }), '/tmp/e', 'sarif');
+    expect(args[args.length - 1]).toBe('app:1.4.2');
+    expect(args.slice(args.length - 7, args.length - 1)).toEqual([
+      '--format',
+      'sarif',
+      '--output',
+      '/workspace/.trivy/report-0.sarif',
+      '--exit-code',
+      '0',
+    ]);
+  });
+
+  it.each(RESERVED_TRIVY_FLAGS)(
+    'rejects the reserved flag "%s" in extraTrivyArgs for an extra-format run too',
+    (flag) => {
+      expect(() =>
+        buildFormatArgs(config({ extraTrivyArgs: `${flag} value` }), '/tmp/e', 'sarif'),
+      ).toThrow();
+    },
+  );
+
+  it('mounts the docker socket for an extra run only when asked, same as the scan', () => {
+    expect(buildFormatArgs(config(), '/tmp/e', 'sarif').join(' ')).not.toContain('docker.sock');
+    expect(buildFormatArgs(config({ useDockerSocket: true }), '/tmp/e', 'sarif')).toContain(
+      '/var/run/docker.sock:/var/run/docker.sock',
+    );
+  });
+
+  it('rejects a workingDirectory that escapes the workspace for an extra run too', () => {
+    expect(() =>
+      buildFormatArgs(config({ workingDirectory: '../../etc' }), '/tmp/e', 'sarif'),
+    ).toThrow(/workingDirectory.*escapes/is);
   });
 });

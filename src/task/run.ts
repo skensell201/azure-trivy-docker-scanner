@@ -2,10 +2,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveConfig } from './ConfigResolver';
 import {
+  buildFormatArgs,
   buildScanArgs,
   buildTrivyEnv,
   buildVersionArgs,
   containerName,
+  ExtraFormat,
+  hostExtraPath,
   hostReportPath,
   RegistryCredentials,
 } from './DockerCommand';
@@ -18,56 +21,13 @@ import {
   AgentContext,
   DefaultsConfig,
   NormalizedReport,
+  ResolvedScanConfig,
   RunnerConfig,
   RunnerInfo,
   TaskInputs,
 } from '../shared/types';
 
 export class ScanExecutionError extends Error {}
-
-/**
- * Task 15b is expected to add a public `warn` method to Publisher for exactly this kind
- * of message. Until it lands, this module cannot add one itself (Publisher.ts is owned
- * by other in-flight work), so it detects the method at runtime and, failing that,
- * falls back to the LineWriter Publisher already wraps internally. Reaching past
- * Publisher's `private` modifier this way is not pretty, but it is what keeps this
- * warning visible through whatever sink a caller gave Publisher (a test's array, a log
- * file, ...) instead of silently going to `console.log` regardless of what the caller
- * asked for. `console.log` remains only as a last-resort fallback if neither surface is
- * present. Once Publisher grows `warn`, the two fallback branches simply stop firing.
- */
-function emitVersionProbeWarning(publisher: Publisher, reason: string): void {
-  const message = `Trivy version probe failed: the report will not record the trivy version or database date. Reason: ${sanitizeForWarningLine(reason)}`;
-  const line = `##vso[task.logissue type=warning]${message}`;
-  const surface = publisher as unknown as {
-    warn?: (text: string) => void;
-    write?: (text: string) => void;
-  };
-  if (typeof surface.warn === 'function') {
-    surface.warn(message);
-    return;
-  }
-  if (typeof surface.write === 'function') {
-    surface.write(line);
-    return;
-  }
-  console.log(line);
-}
-
-/**
- * Mirrors Publisher's own sanitizeForLogLine: `reason` comes from a caught error's
- * message, which can originate in process stderr this task does not control, so it
- * gets the same two defenses before reaching a `##vso[...]` log line -- a raw newline
- * would start a second physical line, and a literal "##vso[" in that second line would
- * be executed as a command of the error's choosing.
- */
-function sanitizeForWarningLine(text: string): string {
-  return text
-    .replace(/\r\n|\r|\n/g, ' ')
-    .replace(/##vso\[/gi, '#-vso[')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
 
 function createDirectoryOrThrow(dirPath: string, description: string, extraGuidance: string): void {
   try {
@@ -118,7 +78,9 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     const version = await processRunner.run('docker', buildVersionArgs(config));
     runnerInfo = { ...runnerInfo, ...parseVersion(version.stdout) };
   } catch (error) {
-    emitVersionProbeWarning(publisher, (error as Error).message);
+    publisher.warn(
+      `Trivy version probe failed: the report will not record the trivy version or database date. Reason: ${(error as Error).message}`,
+    );
   }
 
   createDirectoryOrThrow(
@@ -133,35 +95,57 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     `scan-${config.scanIndex}`,
     buildTrivyEnv(config, args.credentials),
   );
+  const timeoutMs = config.timeoutMinutes * 60_000 + 30_000;
 
-  let scan;
   try {
-    scan = await processRunner.run('docker', buildScanArgs(config, envFile), {
-      timeoutMs: config.timeoutMinutes * 60_000 + 30_000,
+    const scan = await processRunner.run('docker', buildScanArgs(config, envFile), {
+      timeoutMs,
       onStdout: (chunk) => process.stdout.write(chunk),
     });
+
+    if (scan.timedOut) {
+      await processRunner.run('docker', ['rm', '-f', containerName(config)]);
+      throw new ScanExecutionError(
+        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
+      );
+    }
+
+    if (scan.exitCode !== 0) {
+      // A non-zero docker exit is an infrastructure failure (docker itself could not
+      // run the container), never "the scan found vulnerabilities" -- trivy always runs
+      // with --exit-code 0 for exactly that reason, so the gate is the only thing that
+      // can fail a build over findings.
+      throw new ScanExecutionError(
+        `docker exited with code ${scan.exitCode} while running ${config.runner.image}. ` +
+          `This is an infrastructure failure, not a scan result. Output: ${scan.stderr.trim() || scan.stdout.trim()}`,
+      );
+    }
+
+    // Extra formats reuse this same env file (same registry credentials, same TRIVY_*
+    // vars as the JSON scan) and must run while it still exists. It is removed exactly
+    // once, in the `finally` below, after every docker invocation for this scan -- the
+    // JSON scan and any extra-format runs -- has finished.
+    if (config.formats.includes('sarif')) {
+      await emitExtraFormat(config, envFile, 'sarif', timeoutMs, processRunner, publisher, (host) =>
+        publisher.publishSarif(host),
+      );
+    }
+    if (config.generateSbom !== 'off') {
+      await emitExtraFormat(
+        config,
+        envFile,
+        config.generateSbom,
+        timeoutMs,
+        processRunner,
+        publisher,
+        (host) => publisher.publishArtifact(host, 'TrivySBOM'),
+      );
+    }
   } finally {
     // The env file holds registry credentials: it must be gone whether the scan
-    // succeeded, failed, or the process runner itself threw.
+    // succeeded, failed, an extra-format run failed, or any process runner call above
+    // threw outright.
     removeEnvFile(envFile);
-  }
-
-  if (scan.timedOut) {
-    await processRunner.run('docker', ['rm', '-f', containerName(config)]);
-    throw new ScanExecutionError(
-      `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
-    );
-  }
-
-  if (scan.exitCode !== 0) {
-    // A non-zero docker exit is an infrastructure failure (docker itself could not
-    // run the container), never "the scan found vulnerabilities" -- trivy always runs
-    // with --exit-code 0 for exactly that reason, so the gate is the only thing that
-    // can fail a build over findings.
-    throw new ScanExecutionError(
-      `docker exited with code ${scan.exitCode} while running ${config.runner.image}. ` +
-        `This is an infrastructure failure, not a scan result. Output: ${scan.stderr.trim() || scan.stdout.trim()}`,
-    );
   }
 
   const reportPath = hostReportPath(config);
@@ -180,10 +164,53 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   const gate = evaluateGate(report, config.failOn);
 
   publisher.printSummary(report, config.runner.alias);
+  if (config.formats.includes('table')) {
+    publisher.printFindingsTable(report);
+  }
   publisher.attachReport(reportPath, config.scanIndex);
   if (gate.blocking.length > 0) {
     publisher.logBlockingFindings(gate.blocking);
   }
 
   return { report, gate, reportPath };
+}
+
+/**
+ * An extra format is a convenience, not the gate: the JSON report parsed above is what
+ * the gate and the results tab depend on, so a problem producing SARIF or an SBOM -- a
+ * non-zero docker exit, a missing output file, or the process runner call itself
+ * rejecting outright (the same possibility already handled for the version probe above,
+ * since nothing in the ProcessRunner interface forbids it) -- is reported as a warning
+ * and must never fail the scan.
+ */
+async function emitExtraFormat(
+  config: ResolvedScanConfig,
+  envFile: string,
+  format: ExtraFormat,
+  timeoutMs: number,
+  processRunner: ProcessRunner,
+  publisher: Publisher,
+  publish: (hostPath: string) => void,
+): Promise<void> {
+  let result;
+  try {
+    result = await processRunner.run('docker', buildFormatArgs(config, envFile, format), {
+      timeoutMs,
+    });
+  } catch (error) {
+    publisher.warn(
+      `Could not produce the ${format} output: ${(error as Error).message}. The scan result itself is unaffected.`,
+    );
+    return;
+  }
+
+  const hostPath = hostExtraPath(config, format);
+  if (result.exitCode !== 0 || !fs.existsSync(hostPath)) {
+    publisher.warn(
+      `Could not produce the ${format} output: ${result.stderr.trim() || 'no file was written'}. The scan result itself is unaffected.`,
+    );
+    return;
+  }
+
+  publish(hostPath);
 }

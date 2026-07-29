@@ -1,4 +1,4 @@
-import { SEVERITY_ORDER } from '../shared/severity';
+import { compareSeverity, SEVERITY_ORDER } from '../shared/severity';
 import { Finding, NormalizedReport } from '../shared/types';
 
 /**
@@ -121,6 +121,56 @@ export class Publisher {
     }
     for (const severity of [...SEVERITY_ORDER].reverse()) {
       this.write(`  ${severity}: ${report.counts[severity]}`);
+    }
+  }
+
+  /** A build issue at warning level: used for problems that must be visible but must
+   * never fail the build by themselves (e.g. an extra output format that could not be
+   * produced). The message goes through sanitizeForLogLine like every other value this
+   * class writes - see the class doc comment. */
+  warn(message: string): void {
+    this.write(`##vso[task.logissue type=warning]${this.sanitizeForLogLine(message)}`);
+  }
+
+  /**
+   * Renders the findings already parsed into the report as a plain log table, most to
+   * least severe. This is not a second trivy invocation - scanning twice to get text
+   * instead of JSON would double the build time for nothing - so it works from the
+   * same NormalizedReport the gate already evaluated.
+   *
+   * Column widths are for alignment only, never for truncation: padEnd never slice()s,
+   * so a long package name (npm scoped names and Java group/artifact ids routinely run
+   * past 25 characters) stays fully readable even if that one row does not line up
+   * under the header.
+   */
+  printFindingsTable(report: NormalizedReport): void {
+    if (report.findings.length === 0) {
+      this.write('No findings.');
+      return;
+    }
+
+    const rows = [...report.findings].sort((a, b) => compareSeverity(b.severity, a.severity));
+
+    this.write('SEVERITY  ID                    PACKAGE                        FIXED IN');
+    for (const finding of rows) {
+      // Every one of these can originate from a scanned artifact (e.g. a lockfile
+      // package name), so each goes through sanitizeForLogLine before reaching write()
+      // - same rule as logBlockingFindings and printSummary.
+      const id = this.sanitizeForLogLine(finding.id);
+      const pkgName = finding.pkgName ? this.sanitizeForLogLine(finding.pkgName) : undefined;
+      const installedVersion = finding.installedVersion
+        ? this.sanitizeForLogLine(finding.installedVersion)
+        : undefined;
+      const fixedVersion = finding.fixedVersion
+        ? this.sanitizeForLogLine(finding.fixedVersion)
+        : undefined;
+      const target = this.sanitizeForLogLine(finding.target);
+
+      const pkg = `${pkgName ?? target}${installedVersion ? ` ${installedVersion}` : ''}`;
+
+      this.write(
+        `${finding.severity.padEnd(9)} ${id.padEnd(21)} ${pkg.padEnd(30)} ${fixedVersion ?? '-'}`,
+      );
     }
   }
 }

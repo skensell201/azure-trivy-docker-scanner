@@ -201,5 +201,74 @@ describe('Publisher', () => {
       const rendered = physicalLines();
       expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(0);
     });
+
+    it('keeps a package name carrying an embedded logging command to a single physical line in the findings table', () => {
+      const malicious = {
+        ...report.findings[0],
+        pkgName: 'evil-pkg\n##vso[task.complete result=Succeeded]',
+      };
+      publisher.printFindingsTable({ ...report, findings: [malicious] });
+
+      const rendered = physicalLines();
+      expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(0);
+    });
+
+    it('does not let an embedded logging command in a warning message produce a second command line', () => {
+      publisher.warn('trouble\n##vso[task.complete result=Succeeded]');
+
+      const rendered = physicalLines();
+      expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(1);
+      expect(rendered[0]).not.toContain('##vso[task.complete');
+    });
+  });
+
+  describe('printFindingsTable', () => {
+    it('renders a table of findings sorted by severity', () => {
+      publisher.printFindingsTable(report);
+      const text = lines.join('\n');
+      expect(text).toContain('CRITICAL');
+      expect(text).toContain('CVE-2024-21626');
+      expect(text).toContain('runc');
+    });
+
+    it('says so instead of printing an empty table', () => {
+      publisher.printFindingsTable({ ...report, findings: [] });
+      expect(lines.join('\n')).toMatch(/no findings/i);
+    });
+
+    it('sorts findings from most to least severe', () => {
+      const mixed: NormalizedReport = {
+        ...report,
+        findings: [
+          { ...report.findings[0], severity: 'LOW', id: 'CVE-LOW' },
+          { ...report.findings[0], severity: 'CRITICAL', id: 'CVE-CRIT' },
+          { ...report.findings[0], severity: 'MEDIUM', id: 'CVE-MED' },
+        ],
+      };
+      publisher.printFindingsTable(mixed);
+      const text = lines.join('\n');
+      expect(text.indexOf('CVE-CRIT')).toBeLessThan(text.indexOf('CVE-MED'));
+      expect(text.indexOf('CVE-MED')).toBeLessThan(text.indexOf('CVE-LOW'));
+    });
+
+    // A design choice worth pinning: the column widths are for alignment only, never
+    // for truncation. A long package name (npm scoped names and Java group/artifact
+    // ids routinely run past 25 characters) must remain fully readable even if that
+    // row no longer lines up under the header.
+    it('does not truncate a long package name', () => {
+      const longName = 'org.apache.some.very.long.groupid.and.artifact-name-that-keeps-going';
+      publisher.printFindingsTable({
+        ...report,
+        findings: [{ ...report.findings[0], pkgName: longName }],
+      });
+      expect(lines.join('\n')).toContain(longName);
+    });
+  });
+
+  describe('warn', () => {
+    it('emits a warning issue', () => {
+      publisher.warn('sarif run failed');
+      expect(lines).toEqual(['##vso[task.logissue type=warning]sarif run failed']);
+    });
   });
 });
