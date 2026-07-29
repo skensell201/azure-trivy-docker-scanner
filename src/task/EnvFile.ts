@@ -17,6 +17,9 @@ export function writeEnvFile(dir: string, name: string, env: Record<string, stri
   // is already sitting at `file`. Since this file holds registry credentials, a
   // pre-planted symlink would make us write secrets through it and then chmod
   // whatever it points at. O_NOFOLLOW makes the open itself fail on a symlink instead.
+  // Permissions are set with fchmodSync on the open descriptor rather than chmodSync
+  // on the path: that guarantees the mode lands on the file we actually opened, with
+  // no second path lookup and therefore no window for a symlink swap in between.
   const fd = fs.openSync(
     file,
     fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW,
@@ -24,10 +27,10 @@ export function writeEnvFile(dir: string, name: string, env: Record<string, stri
   );
   try {
     fs.writeSync(fd, content);
+    fs.fchmodSync(fd, 0o600);
   } finally {
     fs.closeSync(fd);
   }
-  fs.chmodSync(file, 0o600);
   return file;
 }
 
