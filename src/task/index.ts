@@ -89,6 +89,21 @@ async function main(): Promise<void> {
     const runners = (await client.readDocument<RunnerConfig[]>('runners')) ?? [];
     const defaults = await client.readDocument<DefaultsConfig>('defaults');
 
+    // Both passwords are entered once by an administrator directly into the settings
+    // document (see RunnerConfig/DefaultsConfig doc comments) and are stored there in
+    // plain text - the Extension Data Service is not a secret store. Registering them
+    // with tl.setSecret here, as early as possible after they are read and before any
+    // validation or scan step can log anything, makes the agent mask them out of every
+    // log line for the rest of this run if either one is ever echoed anywhere.
+    for (const runner of runners) {
+      if (runner.registryPassword) {
+        tl.setSecret(runner.registryPassword);
+      }
+    }
+    if (defaults?.dbRegistryPassword) {
+      tl.setSecret(defaults.dbRegistryPassword);
+    }
+
     if (!defaults) {
       throw new Error(
         'The project has no Trivy settings yet. Open Project Settings > Trivy Scanner and configure the database mirror and at least one runner.',

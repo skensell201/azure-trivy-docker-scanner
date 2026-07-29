@@ -35,7 +35,14 @@ export interface RunnerConfig {
   image: string;
   displayName?: string;
   description?: string;
-  registryConnection?: string;
+  /**
+   * Entered once by an administrator in the settings document, not supplied per pipeline:
+   * the Extension Data Service is not a secret store, so `registryPassword` is stored in
+   * plain text and readable by anyone with extension-data read access to this project. Both
+   * fields are optional together, but `validateRunner` rejects one being set without the other.
+   */
+  registryUsername?: string;
+  registryPassword?: string;
   extraDockerArgs?: string;
   isDefault?: boolean;
   /** Omitted means enabled. */
@@ -45,7 +52,14 @@ export interface RunnerConfig {
 export interface DefaultsConfig {
   dbRepository: string;
   javaDbRepository?: string;
-  dbRegistryConnection?: string;
+  /**
+   * Same plain-text-storage caveat as `RunnerConfig.registryUsername`/`registryPassword`
+   * above. Trivy reads these from `TRIVY_USERNAME`/`TRIVY_PASSWORD` inside the container,
+   * which the scanned image's own credentials (`TaskInputs.targetRegistryConnection`) also
+   * use - see `run.ts`'s credential resolution for how that collision is handled.
+   */
+  dbRegistryUsername?: string;
+  dbRegistryPassword?: string;
   cacheDir?: string;
   skipDbUpdate?: boolean;
   severities?: Severity[];

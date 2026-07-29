@@ -9,11 +9,18 @@ import { AgentContext, DefaultsConfig, RunnerConfig, TaskInputs } from '../../sh
 class FakeRunner implements ProcessRunner {
   calls: { command: string; args: string[]; options?: RunOptions }[] = [];
   results: ProcessResult[] = [];
+  /** Consumed by a `docker login` call only; defaults to success so most tests need not set it. */
+  loginResults: ProcessResult[] = [];
 
   constructor(private readonly onScan?: (args: string[]) => void) {}
 
   run(command: string, args: string[], options?: RunOptions): Promise<ProcessResult> {
     this.calls.push({ command, args, options });
+    if (args.includes('login')) {
+      return Promise.resolve(
+        this.loginResults.shift() ?? { exitCode: 0, stdout: '', stderr: '', timedOut: false },
+      );
+    }
     if (args.includes('version')) {
       return Promise.resolve({
         exitCode: 0,
@@ -771,5 +778,195 @@ describe('runScan', () => {
       expect.arrayContaining(['trivyscan-1042-0', 'trivyscan-1042-0-sarif', 'trivyscan-1042-0-sbom']),
     );
     expect(new Set(names).size).toBe(names.length);
+  });
+
+  describe('docker login for the runner image', () => {
+    const runnersWithCreds: RunnerConfig[] = [
+      {
+        alias: 'baseline',
+        image: 'reg.corp/trivy:0.58.1',
+        isDefault: true,
+        enabled: true,
+        registryUsername: 'svc-runner',
+        registryPassword: 'runner-p@ss',
+      },
+    ];
+
+    it('does not attempt a docker login when the runner carries no credentials', async () => {
+      const runner = new FakeRunner(writeReport);
+      await invoke(runner);
+      expect(runner.calls.some((call) => call.args.includes('login'))).toBe(false);
+    });
+
+    it('logs in to the runner registry, via stdin, before probing the version', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners: runnersWithCreds,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      expect(runner.calls[0].args).toEqual([
+        'login',
+        'reg.corp',
+        '--username',
+        'svc-runner',
+        '--password-stdin',
+      ]);
+      expect(runner.calls[0].options?.stdin).toBe('runner-p@ss');
+      expect(runner.calls[0].args.join(' ')).not.toContain('runner-p@ss');
+      expect(runner.calls[1].args).toContain('version');
+      expect(runner.calls[2].args).toContain('image');
+    });
+
+    it('derives the login host from a registry with a dot in its hostname', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners: runnersWithCreds,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(runner.calls[0].args[1]).toBe('reg.corp');
+    });
+
+    it('derives the login host from a registry with an explicit port', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners: [
+          { ...runnersWithCreds[0], image: 'reg.corp:5000/trivy:0.58.1' },
+        ],
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(runner.calls[0].args[1]).toBe('reg.corp:5000');
+    });
+
+    it('derives the Docker Hub host for a bare image name', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners: [{ ...runnersWithCreds[0], image: 'nginx:1.25' }],
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(runner.calls[0].args[1]).toBe('docker.io');
+    });
+
+    it('does not attempt the version probe or the scan when the login fails, naming the host and the runner alias', async () => {
+      const runner = new FakeRunner(writeReport);
+      runner.loginResults = [
+        { exitCode: 1, stdout: '', stderr: 'unauthorized: authentication required', timedOut: false },
+      ];
+
+      let error: Error | undefined;
+      try {
+        await runScan({
+          defaults,
+          runners: runnersWithCreds,
+          inputs,
+          agent,
+          scanIndex: 0,
+          processRunner: runner,
+          publisher: new Publisher((line) => lines.push(line)),
+          credentials: {},
+        });
+      } catch (e) {
+        error = e as Error;
+      }
+
+      expect(error?.message).toMatch(/reg\.corp/);
+      expect(error?.message).toMatch(/baseline/);
+      expect(runner.calls).toHaveLength(1);
+      expect(runner.calls.some((call) => call.args.includes('version'))).toBe(false);
+    });
+  });
+
+  describe('database mirror credentials vs. target-image credentials (TRIVY_USERNAME/TRIVY_PASSWORD collision)', () => {
+    const captureEnvFile = (sink: { content: string }) => (args: string[]) => {
+      const envIndex = args.indexOf('--env-file');
+      if (envIndex !== -1) {
+        sink.content = fs.readFileSync(args[envIndex + 1], 'utf8');
+      }
+      writeReport();
+    };
+
+    it('uses the database mirror credentials when no target-image credentials were supplied', async () => {
+      const sink = { content: '' };
+      const runner = new FakeRunner(captureEnvFile(sink));
+      await runScan({
+        defaults: { ...defaults, dbRegistryUsername: 'db-svc', dbRegistryPassword: 'db-p@ss' },
+        runners,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(sink.content).toContain('TRIVY_USERNAME=db-svc');
+      expect(sink.content).toContain('TRIVY_PASSWORD=db-p@ss');
+      expect(lines.some((line) => line.includes('type=warning'))).toBe(false);
+    });
+
+    it('prefers target-image credentials over database mirror credentials and warns about the collision', async () => {
+      const sink = { content: '' };
+      const runner = new FakeRunner(captureEnvFile(sink));
+      await runScan({
+        defaults: { ...defaults, dbRegistryUsername: 'db-svc', dbRegistryPassword: 'db-p@ss' },
+        runners,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: { username: 'target-svc', password: 'target-p@ss' },
+      });
+      expect(sink.content).toContain('TRIVY_USERNAME=target-svc');
+      expect(sink.content).toContain('TRIVY_PASSWORD=target-p@ss');
+      expect(sink.content).not.toContain('db-svc');
+      expect(sink.content).not.toContain('db-p@ss');
+      expect(
+        lines.some(
+          (line) =>
+            line.includes('type=warning') &&
+            /database.mirror|dbRegistry/i.test(line) &&
+            /target/i.test(line),
+        ),
+      ).toBe(true);
+    });
+
+    it('does not warn when only target-image credentials are supplied and no database mirror credentials exist', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: { username: 'target-svc', password: 'target-p@ss' },
+      });
+      expect(lines.some((line) => line.includes('type=warning'))).toBe(false);
+    });
   });
 });

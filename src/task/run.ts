@@ -3,6 +3,7 @@ import * as path from 'path';
 import { resolveConfig } from './ConfigResolver';
 import {
   buildFormatArgs,
+  buildLoginArgs,
   buildScanArgs,
   buildTrivyEnv,
   buildVersionArgs,
@@ -10,6 +11,7 @@ import {
   ExtraFormat,
   hostExtraPath,
   hostReportPath,
+  registryHostFromImage,
   RegistryCredentials,
 } from './DockerCommand';
 import { removeEnvFile, writeEnvFile } from './EnvFile';
@@ -89,6 +91,83 @@ function dbDownloadFailureMessage(
   );
 }
 
+/**
+ * Logs in to the registry hosting the selected runner's image, when an administrator
+ * entered credentials for it in the settings document (`RunnerConfig.registryUsername` /
+ * `registryPassword`). Both fields are optional together and `validateRunner` rejects one
+ * without the other, so here either both are present or neither is - there is no partial
+ * case to handle.
+ *
+ * Runs before the version probe and the scan (both of which pull the image), because a
+ * private registry that requires auth would otherwise fail the pull with a confusing
+ * `docker exited with code 125` rather than this named failure. The password reaches
+ * docker only through `RunOptions.stdin` (`--password-stdin`), never through argv.
+ */
+async function loginToRunnerRegistry(
+  config: ResolvedScanConfig,
+  processRunner: ProcessRunner,
+): Promise<void> {
+  const { registryUsername: username, registryPassword: password } = config.runner;
+  if (!username || !password) {
+    return;
+  }
+
+  const host = registryHostFromImage(config.runner.image);
+  const result = await processRunner.run('docker', buildLoginArgs(host, username), {
+    stdin: password,
+  });
+
+  if (result.exitCode !== 0) {
+    throw new ScanExecutionError(
+      `docker login to registry "${host}" failed for runner "${config.runner.alias}": ` +
+        `${result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode}`}. ` +
+        'The scan was not attempted, since the image pull would fail with a worse message anyway.',
+    );
+  }
+}
+
+/**
+ * Trivy pulls the vulnerability database from *inside* the container, so a host-side
+ * `docker login` (see `loginToRunnerRegistry` above) cannot help it: it reads
+ * `TRIVY_USERNAME`/`TRIVY_PASSWORD` from its own environment instead, and those same two
+ * variables are already how the *scanned image's* credentials
+ * (`TaskInputs.targetRegistryConnection`, resolved by `index.ts` into `RunScanArgs.credentials`)
+ * reach trivy for a private-registry `image` scan. Trivy has no second pair of variables and
+ * this task deliberately does not attempt per-registry credential mapping through repeated
+ * trivy flags (fragile, and the common on-prem case is one corporate registry for
+ * everything) - so when both sources are configured, only one can actually be presented,
+ * and the choice must be explicit rather than one silently overwriting the other:
+ * the target image's credentials win, since they are specific to *this* scan, and the
+ * database-mirror credentials are dropped with a warning explaining why.
+ */
+function resolveTrivyCredentials(
+  defaults: DefaultsConfig,
+  targetCredentials: RegistryCredentials,
+  publisher: Publisher,
+): RegistryCredentials {
+  const hasTargetCredentials = Boolean(targetCredentials.username || targetCredentials.password);
+  const hasDbMirrorCredentials = Boolean(
+    defaults.dbRegistryUsername || defaults.dbRegistryPassword,
+  );
+
+  if (hasTargetCredentials && hasDbMirrorCredentials) {
+    publisher.warn(
+      'Both a target-image registry connection (targetRegistryConnection) and database-mirror ' +
+        'credentials (dbRegistryUsername/dbRegistryPassword) are configured. Trivy reads a ' +
+        'single TRIVY_USERNAME/TRIVY_PASSWORD pair from its environment for both purposes, so ' +
+        'only one can be presented for this scan: the target image credentials are used, and ' +
+        'the database-mirror credentials are ignored.',
+    );
+    return targetCredentials;
+  }
+
+  if (hasTargetCredentials) {
+    return targetCredentials;
+  }
+
+  return { username: defaults.dbRegistryUsername, password: defaults.dbRegistryPassword };
+}
+
 export interface RunScanArgs {
   defaults: DefaultsConfig;
   runners: RunnerConfig[];
@@ -130,6 +209,18 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     "This path comes from the project's Trivy settings (cacheDir) - an administrator can change it there.",
   );
 
+  // Before the version probe and the scan below, both of which pull the runner image: a
+  // private registry that needs auth would otherwise fail the pull with an opaque
+  // "docker exited with code 125" instead of this named failure. loginToRunnerRegistry
+  // itself throws (aborting the scan) when the runner carries credentials but the login
+  // fails; it is a no-op when the runner carries none.
+  await loginToRunnerRegistry(config, processRunner);
+
+  // Resolved once, before the version probe, since the message dbDownloadFailureMessage
+  // builds below (on the scan path) and the env file (also below) both need the same
+  // decision about which credentials actually reached TRIVY_USERNAME/TRIVY_PASSWORD.
+  const trivyCredentials = resolveTrivyCredentials(args.defaults, args.credentials, publisher);
+
   // The version probe is decoration (see ReportParser.parseVersion): a garbled response
   // already cannot fail the scan below, and neither can the probe call itself throwing
   // outright -- e.g. a ProcessRunner implementation that rejects instead of resolving
@@ -151,7 +242,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   const envFile = writeEnvFile(
     args.agent.tempDir,
     `scan-${config.scanIndex}`,
-    buildTrivyEnv(config, args.credentials),
+    buildTrivyEnv(config, trivyCredentials),
   );
   const timeoutMs = config.timeoutMinutes * 60_000 + 30_000;
 
@@ -185,7 +276,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
         throw new ScanExecutionError(dockerNotFoundMessage(scan));
       }
       if (isDbDownloadFailure(scan)) {
-        throw new ScanExecutionError(dbDownloadFailureMessage(config, args.credentials));
+        throw new ScanExecutionError(dbDownloadFailureMessage(config, trivyCredentials));
       }
       throw new ScanExecutionError(
         `docker exited with code ${scan.exitCode} while running ${config.runner.image}. ` +

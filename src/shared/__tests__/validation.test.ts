@@ -131,6 +131,32 @@ describe('validateRunner', () => {
       validateRunner(runner({ image: `reg.corp/trivy:0.58.1@sha256:${'a'.repeat(64)}` })),
     ).toEqual([]);
   });
+
+  // --- registry credentials: administrator-entered pair, neither half may stand alone ---
+
+  it('accepts a runner with neither registry credential set', () => {
+    expect(validateRunner(runner())).toEqual([]);
+  });
+
+  it('accepts a runner with both registry credentials set', () => {
+    expect(
+      validateRunner(runner({ registryUsername: 'svc', registryPassword: 'p@ss' })),
+    ).toEqual([]);
+  });
+
+  it('rejects a registryUsername without a registryPassword, naming the missing field', () => {
+    const issues = validateRunner(runner({ registryUsername: 'svc' }));
+    expect(issues).toEqual([
+      { field: 'registryPassword', message: expect.stringContaining('registryPassword') },
+    ]);
+  });
+
+  it('rejects a registryPassword without a registryUsername, naming the missing field', () => {
+    const issues = validateRunner(runner({ registryPassword: 'p@ss' }));
+    expect(issues).toEqual([
+      { field: 'registryUsername', message: expect.stringContaining('registryUsername') },
+    ]);
+  });
 });
 
 describe('validateCatalog', () => {
@@ -413,6 +439,32 @@ describe('validateDefaults', () => {
     );
     expect(issues).toEqual([
       { field: 'scanners', message: expect.stringContaining('bogus') },
+    ]);
+  });
+
+  // --- dbRegistry credentials: administrator-entered pair, neither half may stand alone ---
+
+  it('accepts defaults with neither db registry credential set', () => {
+    expect(validateDefaults(defaults())).toEqual([]);
+  });
+
+  it('accepts defaults with both db registry credentials set', () => {
+    expect(
+      validateDefaults(defaults({ dbRegistryUsername: 'svc', dbRegistryPassword: 'p@ss' })),
+    ).toEqual([]);
+  });
+
+  it('rejects a dbRegistryUsername without a dbRegistryPassword, naming the missing field', () => {
+    const issues = validateDefaults(defaults({ dbRegistryUsername: 'svc' }));
+    expect(issues).toEqual([
+      { field: 'dbRegistryPassword', message: expect.stringContaining('dbRegistryPassword') },
+    ]);
+  });
+
+  it('rejects a dbRegistryPassword without a dbRegistryUsername, naming the missing field', () => {
+    const issues = validateDefaults(defaults({ dbRegistryPassword: 'p@ss' }));
+    expect(issues).toEqual([
+      { field: 'dbRegistryUsername', message: expect.stringContaining('dbRegistryUsername') },
     ]);
   });
 });

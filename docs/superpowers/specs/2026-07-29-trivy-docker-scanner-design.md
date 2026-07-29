@@ -79,7 +79,8 @@ Scopes манифеста: `vso.build_execute`, `vso.extension_data`.
 | `image` | да | Полная ссылка на образ с trivy. Тег обязателен, `latest` запрещён валидацией |
 | `displayName` | нет | Отображаемое имя |
 | `description` | нет | Назначение раннера |
-| `registryConnection` | нет | Docker Registry service connection для registry с раннером |
+| `registryUsername` | нет | Логин для registry, где лежит образ раннера. Обязателен вместе с `registryPassword` — одно без другого отвергается валидацией |
+| `registryPassword` | нет | Пароль для того же registry. Вводится администратором один раз прямо в документ настроек, а не через пайплайн: Extension Data Service — не хранилище секретов, значение хранится в открытом виде и читается всеми, у кого есть доступ на чтение extension data этого проекта |
 | `extraDockerArgs` | нет | `--network none`, `--user 1000:1000`, доп. монтирования |
 | `isDefault` | нет | Ровно один в каталоге; используется, если в таске `runner` не указан |
 | `enabled` | нет | По умолчанию `true`; выключенный нельзя выбрать, история сохраняется |
@@ -90,7 +91,8 @@ Scopes манифеста: `vso.build_execute`, `vso.extension_data`.
 |---|---|---|
 | `dbRepository` | да | OCI-зеркало БД → `TRIVY_DB_REPOSITORY` |
 | `javaDbRepository` | нет | `TRIVY_JAVA_DB_REPOSITORY` |
-| `dbRegistryConnection` | нет | Service connection, если зеркало БД требует авторизации |
+| `dbRegistryUsername` | нет | Логин для registry, где лежит зеркало БД, если оно требует авторизации. Обязателен вместе с `dbRegistryPassword` — одно без другого отвергается валидацией |
+| `dbRegistryPassword` | нет | Пароль для того же registry. Та же оговорка про открытое хранение, что и у `registryPassword` выше. Trivy читает эту пару из `TRIVY_USERNAME`/`TRIVY_PASSWORD` внутри контейнера — тех же переменных, которыми уже пользуются учётные данные сканируемого образа (`targetRegistryConnection` таска). Если пайплайн задал и то, и другое, побеждают учётные данные сканируемого образа, а `dbRegistryUsername`/`dbRegistryPassword` игнорируются с предупреждением в логе — см. «Исполнение скана» |
 | `cacheDir` | нет | Путь на агенте → `/root/.cache/trivy`. Дефолт `$(Agent.HomeDirectory)/_trivy-cache` |
 | `skipDbUpdate` | нет | Дефолт `false` |
 | `severities` | нет | Дефолт `CRITICAL,HIGH` |
@@ -146,8 +148,30 @@ docker run --rm --name trivyscan-$(Build.BuildId)-<n>
 ```
 
 Секреты (`TRIVY_USERNAME`, `TRIVY_PASSWORD`) передаются только через `--env-file` с правами 0600,
-файл удаляется в `finally`. `docker login` — через `--password-stdin`. В argv секретов нет никогда:
-argv виден в `ps` на агенте и в отладочных логах.
+файл удаляется в `finally`. В argv секретов нет никогда: argv виден в `ps` на агенте и в
+отладочных логах.
+
+Если у выбранного раннера в каталоге заданы `registryUsername`/`registryPassword`, перед пробой
+версии и перед самим сканом (оба тянут образ раннера) таск выполняет
+`docker login <host> --username <user> --password-stdin`, передавая пароль только через stdin
+(`RunOptions.stdin`), никогда через argv. `<host>` — это первый сегмент ссылки на образ до `/`,
+если он содержит точку или двоеточие (порт); иначе используется `docker.io` — то же правило,
+по которому docker сам разбирает ссылку на образ. Например, `reg.corp/trivy:0.58.1` →
+`reg.corp`, `reg.corp:5000/trivy:0.58.1` → `reg.corp:5000`, `nginx:1.25` → `docker.io`. Если
+`docker login` завершается с ненулевым кодом, таск падает с сообщением, называющим registry и
+алиас раннера, и не пытается запустить сам скан — пул всё равно провалится с куда менее понятной
+ошибкой.
+
+Trivy тянет БД уязвимостей изнутри контейнера, поэтому host-side `docker login` выше ему не
+помогает: он читает `TRIVY_USERNAME`/`TRIVY_PASSWORD` из собственного окружения. Ровно эти же две
+переменные уже несут учётные данные сканируемого образа (`targetRegistryConnection` таска), и
+второй пары переменных у trivy нет — сопоставление credentials на каждый registry через
+повторяющиеся флаги trivy сознательно не реализовано: это хрупко, а обычный on-prem случай —
+один корпоративный registry на всё. Поэтому при коллизии таск не пытается объединить обе пары
+хитрым способом, а разрешает её явно: если пайплайн задал учётные данные для сканируемого образа,
+они и попадают в `TRIVY_USERNAME`/`TRIVY_PASSWORD`, а `dbRegistryUsername`/`dbRegistryPassword`
+игнорируются с предупреждением в логе, объясняющим почему; если пайплайн ничего не задал — в
+переменные попадают учётные данные зеркала БД.
 
 Trivy всегда запускается с `--exit-code 0`, гейт считается по распарсенному JSON.
 Иначе порог падения живёт в двух местах (флаги trivy и наша вкладка) и они неизбежно разойдутся;
@@ -224,7 +248,7 @@ Trivy всегда запускается с `--exit-code 0`, гейт счит�
 
 | Что | Как |
 |---|---|
-| `DockerCommand` | Монтирования, отсутствие секретов в argv, `useDockerSocket`, `extraDockerArgs` |
+| `DockerCommand` | Монтирования, отсутствие секретов в argv, `useDockerSocket`, `extraDockerArgs`, форма `docker login`, вывод host из ссылки на образ (точка, порт, голое имя Docker Hub) |
 | `ConfigResolver` | Приоритет значений, отказ при нарушении `allowOverrides` |
 | `GateEvaluator` | Три исхода и текст причины |
 | `ReportParser` | Фикстуры реального вывода trivy: находки, пустой отчёт, secrets, misconfig, битый JSON |

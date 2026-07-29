@@ -262,7 +262,8 @@ describe('Fix 4: whole-object contract', () => {
     const fullDefaults: DefaultsConfig = {
       dbRepository: 'reg.corp/trivy-db:2',
       javaDbRepository: 'reg.corp/trivy-java-db:1',
-      dbRegistryConnection: 'admin-conn',
+      dbRegistryUsername: 'admin-user',
+      dbRegistryPassword: 'admin-pass',
       cacheDir: '/admin/cache',
       skipDbUpdate: true,
       severities: ['HIGH'],

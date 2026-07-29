@@ -121,6 +121,23 @@ export function validateRunner(runner: unknown): ValidationIssue[] {
     }
   }
 
+  // Entered once by an administrator, not per pipeline (see RunnerConfig's doc comment):
+  // one half without the other is always a mistake, since docker login needs both.
+  const registryUsername = runner.registryUsername;
+  const registryPassword = runner.registryPassword;
+  if (registryUsername !== undefined && registryPassword === undefined) {
+    issues.push({
+      field: 'registryPassword',
+      message: 'registryPassword is required when registryUsername is set.',
+    });
+  }
+  if (registryPassword !== undefined && registryUsername === undefined) {
+    issues.push({
+      field: 'registryUsername',
+      message: 'registryUsername is required when registryPassword is set.',
+    });
+  }
+
   const extraDockerArgs = runner.extraDockerArgs;
   if (extraDockerArgs !== undefined) {
     if (typeof extraDockerArgs !== 'string') {
@@ -291,6 +308,24 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
         }
       });
     }
+  }
+
+  // Same pairing rule as validateRunner's registryUsername/registryPassword above, for the
+  // database mirror's own credentials (DefaultsConfig's doc comment explains the collision
+  // with the scanned image's credentials that this pair is otherwise subject to).
+  const dbRegistryUsername = config.dbRegistryUsername;
+  const dbRegistryPassword = config.dbRegistryPassword;
+  if (dbRegistryUsername !== undefined && dbRegistryPassword === undefined) {
+    issues.push({
+      field: 'dbRegistryPassword',
+      message: 'dbRegistryPassword is required when dbRegistryUsername is set.',
+    });
+  }
+  if (dbRegistryPassword !== undefined && dbRegistryUsername === undefined) {
+    issues.push({
+      field: 'dbRegistryUsername',
+      message: 'dbRegistryUsername is required when dbRegistryPassword is set.',
+    });
   }
 
   if (config.cacheDir !== undefined) {

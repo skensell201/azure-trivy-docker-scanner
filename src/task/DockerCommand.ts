@@ -236,6 +236,40 @@ function buildArgs(
   return [...docker, ...trivy];
 }
 
+/** Docker's own default when an image reference names no registry at all. */
+const DOCKER_HUB_HOST = 'docker.io';
+
+/**
+ * Derives the registry host that a `docker pull`/`docker login` for this image would talk
+ * to, following the standard rule docker itself uses to parse a reference: the segment
+ * before the first `/` is the registry host only if it looks like one (contains a `.` or a
+ * `:`, the latter covering an explicit port); otherwise the whole reference is a Docker Hub
+ * name (with or without a `library/`-style implicit namespace) and the host is Docker Hub's
+ * own default. A `@sha256:` digest does not change this: the digest marker always comes
+ * after the first `/`, if any, so it never participates in this decision.
+ */
+export function registryHostFromImage(image: string): string {
+  const firstSlash = image.indexOf('/');
+  if (firstSlash === -1) {
+    return DOCKER_HUB_HOST;
+  }
+  const firstSegment = image.slice(0, firstSlash);
+  if (firstSegment.includes('.') || firstSegment.includes(':')) {
+    return firstSegment;
+  }
+  return DOCKER_HUB_HOST;
+}
+
+/**
+ * `docker login <host> --username <user> --password-stdin` for the registry that hosts a
+ * runner's image. The password is deliberately not a parameter here: it must reach docker
+ * only through `RunOptions.stdin` (see ProcessRunner), never through argv, where it would be
+ * visible in `ps` on the agent and in any debug log that echoes the command.
+ */
+export function buildLoginArgs(host: string, username: string): string[] {
+  return ['login', host, '--username', username, '--password-stdin'];
+}
+
 export function buildVersionArgs(config: ResolvedScanConfig): string[] {
   return [
     'run',

@@ -1,11 +1,13 @@
 import {
   buildFormatArgs,
+  buildLoginArgs,
   buildScanArgs,
   buildVersionArgs,
   buildTrivyEnv,
   containerReportPath,
   hostExtraPath,
   hostReportPath,
+  registryHostFromImage,
   RESERVED_TRIVY_FLAGS,
 } from '../DockerCommand';
 import { ResolvedScanConfig } from '../../shared/types';
@@ -299,6 +301,45 @@ describe('buildTrivyEnv', () => {
     expect(buildTrivyEnv(config(), { password: 'p@ss=word' })).toMatchObject({
       TRIVY_PASSWORD: 'p@ss=word',
     });
+  });
+});
+
+describe('registryHostFromImage', () => {
+  it('uses the first path segment as the host when it contains a dot', () => {
+    expect(registryHostFromImage('reg.corp/trivy:0.58.1')).toBe('reg.corp');
+  });
+
+  it('uses the first path segment as the host when it contains a port (colon)', () => {
+    expect(registryHostFromImage('reg.corp:5000/trivy:0.58.1')).toBe('reg.corp:5000');
+  });
+
+  it('falls back to Docker Hub for a bare image name with no registry segment', () => {
+    expect(registryHostFromImage('nginx:1.25')).toBe('docker.io');
+  });
+
+  it('falls back to Docker Hub when the first path segment has neither a dot nor a colon', () => {
+    expect(registryHostFromImage('library/nginx:1.25')).toBe('docker.io');
+  });
+
+  it('handles a digest reference the same way as a tagged one', () => {
+    expect(registryHostFromImage(`reg.corp/trivy@sha256:${'a'.repeat(64)}`)).toBe('reg.corp');
+  });
+});
+
+describe('buildLoginArgs', () => {
+  it('builds a docker login command for the host and username, reading the password from stdin', () => {
+    expect(buildLoginArgs('reg.corp', 'svc')).toEqual([
+      'login',
+      'reg.corp',
+      '--username',
+      'svc',
+      '--password-stdin',
+    ]);
+  });
+
+  it('never places the password in the argv it returns', () => {
+    const args = buildLoginArgs('reg.corp', 'svc');
+    expect(args.join(' ')).not.toMatch(/p@ss|password(?!-stdin)/i);
   });
 });
 
