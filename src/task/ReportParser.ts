@@ -57,6 +57,42 @@ function toSeverity(raw: string | undefined): Severity {
   return isSeverity(value) ? value : 'UNKNOWN';
 }
 
+const CONTROL_CHARS = /[\r\n\t]/g;
+const WHITESPACE_RUN = /\s+/g;
+
+/**
+ * Package names and versions in a filesystem/repository scan come straight out of scanned
+ * lockfiles, so their content is controlled by whoever publishes a dependency. The Publisher
+ * writes findings into Azure Pipelines logging commands that the agent parses line by line
+ * from stdout, where a bare newline starts a new line and a line starting with `##vso[` is
+ * executed as a command — a package name containing an embedded newline followed by
+ * `##vso[task.complete result=Succeeded]` could mark a failed scan as passed. Replacing CR/LF/
+ * tab and collapsing whitespace here, once, means every current and future consumer (log, JSON
+ * attachment, results tab) sees text that cannot break its container, without truncating,
+ * stripping punctuation, or hiding the finding itself.
+ */
+function sanitizeText(value: string): string {
+  return value.replace(CONTROL_CHARS, ' ').replace(WHITESPACE_RUN, ' ').trim();
+}
+
+// Applied once to every finding regardless of kind, so a future finding kind cannot forget it.
+// Fields left absent by the construction above (fixedVersion with no fix, location on
+// non-secret kinds) stay absent: the conditional spreads only touch fields that are present.
+function sanitizeFinding(finding: Finding): Finding {
+  return {
+    ...finding,
+    id: sanitizeText(finding.id),
+    title: sanitizeText(finding.title),
+    target: sanitizeText(finding.target),
+    ...(finding.pkgName !== undefined ? { pkgName: sanitizeText(finding.pkgName) } : {}),
+    ...(finding.installedVersion !== undefined
+      ? { installedVersion: sanitizeText(finding.installedVersion) }
+      : {}),
+    ...(finding.fixedVersion !== undefined ? { fixedVersion: sanitizeText(finding.fixedVersion) } : {}),
+    ...(finding.location !== undefined ? { location: sanitizeText(finding.location) } : {}),
+  };
+}
+
 export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedReport {
   let document: { Results?: RawResult[]; ArtifactName?: string; CreatedAt?: string };
   try {
@@ -75,13 +111,13 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
     );
   }
 
-  const findings: Finding[] = [];
+  const rawFindings: Finding[] = [];
 
   for (const result of document.Results) {
     const target = result.Target ?? meta.target;
 
     for (const item of result.Vulnerabilities ?? []) {
-      findings.push({
+      rawFindings.push({
         kind: 'vulnerability',
         severity: toSeverity(item.Severity),
         id: item.VulnerabilityID ?? 'UNKNOWN',
@@ -96,7 +132,7 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
     }
 
     for (const item of result.Secrets ?? []) {
-      findings.push({
+      rawFindings.push({
         kind: 'secret',
         severity: toSeverity(item.Severity),
         id: item.RuleID ?? 'UNKNOWN',
@@ -112,7 +148,7 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
       if (item.Status !== 'FAIL') {
         continue;
       }
-      findings.push({
+      rawFindings.push({
         kind: 'misconfiguration',
         severity: toSeverity(item.Severity),
         id: item.ID ?? 'UNKNOWN',
@@ -122,7 +158,7 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
     }
 
     for (const item of result.Licenses ?? []) {
-      findings.push({
+      rawFindings.push({
         kind: 'license',
         severity: toSeverity(item.Severity),
         id: item.Name ?? 'UNKNOWN',
@@ -132,6 +168,8 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
       });
     }
   }
+
+  const findings = rawFindings.map(sanitizeFinding);
 
   const counts = emptySeverityCounts();
   const kindCounts = emptyKindCounts();

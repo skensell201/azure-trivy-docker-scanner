@@ -160,6 +160,65 @@ describe('parseTrivyReport self-review pins', () => {
   );
 });
 
+describe('control character normalization', () => {
+  // Findings carry text straight out of scanned lockfiles (filesystem/repository scans),
+  // which is controlled by whoever publishes a dependency. The Publisher writes findings
+  // into Azure Pipelines logging commands parsed line by line from stdout, where a newline
+  // starts a new line and a line starting with `##vso[` is executed as a command. A package
+  // named with an embedded newline followed by `##vso[task.complete result=Succeeded]` must
+  // not survive into the data model as a literal newline, or it can mark a failed scan as
+  // passed regardless of how carefully the Publisher escapes elsewhere.
+  it('strips an injected pipeline logging command out of a package name', () => {
+    const raw = JSON.stringify({
+      SchemaVersion: 2,
+      Results: [
+        {
+          Target: 'app:1.4.2',
+          Vulnerabilities: [
+            {
+              VulnerabilityID: 'CVE-2024-0001',
+              PkgName: 'evil-pkg\n##vso[task.complete result=Succeeded]',
+              InstalledVersion: '1.0.0',
+              Severity: 'HIGH',
+              Title: 'injection attempt',
+            },
+          ],
+        },
+      ],
+    });
+    const report = parseTrivyReport(raw, meta);
+    const pkgName = report.findings[0].pkgName;
+    expect(pkgName).not.toContain('\n');
+    expect(pkgName).not.toContain('\r');
+    expect(pkgName).toBe('evil-pkg ##vso[task.complete result=Succeeded]');
+  });
+
+  it('collapses a CRLF-laden title to single spaces', () => {
+    const raw = JSON.stringify({
+      SchemaVersion: 2,
+      Results: [
+        {
+          Target: 'app:1.4.2',
+          Vulnerabilities: [
+            {
+              VulnerabilityID: 'CVE-2024-0002',
+              Severity: 'HIGH',
+              Title: 'line one\r\nline two\tline three',
+            },
+          ],
+        },
+      ],
+    });
+    const report = parseTrivyReport(raw, meta);
+    expect(report.findings[0].title).toBe('line one line two line three');
+  });
+
+  it('leaves an ordinary title with normal punctuation unchanged', () => {
+    const report = parseTrivyReport(fixture('image-vulns.json'), meta);
+    expect(report.findings[0].title).toBe('runc: file descriptor leak allows container escape');
+  });
+});
+
 describe('parseVersion', () => {
   it('extracts the trivy version and the database timestamp', () => {
     expect(parseVersion(fixture('version.json'))).toEqual({
