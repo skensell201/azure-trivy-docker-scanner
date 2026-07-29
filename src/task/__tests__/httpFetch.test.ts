@@ -2,7 +2,7 @@ import * as http from 'http';
 import * as net from 'net';
 import * as zlib from 'zlib';
 import { AddressInfo } from 'net';
-import { httpFetch } from '../httpFetch';
+import { httpFetch, DEFAULT_TIMEOUT_MS, MAX_BODY_BYTES } from '../httpFetch';
 
 describe('httpFetch', () => {
   let server: http.Server;
@@ -150,6 +150,187 @@ describe('httpFetch', () => {
         ).rejects.not.toMatchObject({ message: expect.stringContaining(secret) });
       } finally {
         stuckServer.close();
+      }
+    });
+
+    // If a collectionUri ever carried userinfo (https://user:secret@host/...), it must not land in
+    // a build log via an error message. The connection-refused test above already shows Node's own
+    // transport errors never include the URL at all; this pins the messages this module
+    // constructs itself (timeout, premature close, body cap all share the same sanitized URL).
+    it('strips userinfo from the URL before it appears in a timeout message', async () => {
+      const stuckServer = net.createServer(() => {
+        // Accept and never respond.
+      });
+      await new Promise<void>((resolve) => stuckServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (stuckServer.address() as AddressInfo).port;
+      const url = `http://user:s3cr3t-pass@127.0.0.1:${port}/doc`;
+
+      try {
+        const failure = httpFetch(url, { headers: {} }, 50);
+        await expect(failure).rejects.toThrow(/timed out/);
+        await failure.catch((error: Error) => {
+          expect(error.message).not.toContain('s3cr3t-pass');
+          expect(error.message).not.toContain('user:');
+        });
+      } finally {
+        stuckServer.close();
+      }
+    });
+
+    // A reviewer found that the idle watchdog above is not enough: Node routes a premature close
+    // of the connection onto the *response*, not the request, so `request.on('error')` alone
+    // never sees it. Verified empirically before this test existed: both a destroyed socket (RST)
+    // and a graceful socket.end() with an unmet Content-Length left the promise pending for 4s+
+    // past a configured 1000ms timeout.
+
+    it('rejects rather than hanging when the connection resets mid-body (RST)', async () => {
+      const stuckServer = net.createServer((socket) => {
+        socket.write(
+          'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n',
+        );
+        socket.write('{"partial":true');
+        socket.destroy();
+      });
+      await new Promise<void>((resolve) => stuckServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (stuckServer.address() as AddressInfo).port;
+
+      try {
+        await expect(httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, 2000)).rejects.toThrow();
+      } finally {
+        stuckServer.close();
+      }
+    }, 4000);
+
+    it('rejects rather than hanging when the connection closes gracefully mid-body (unmet Content-Length)', async () => {
+      const stuckServer = net.createServer((socket) => {
+        socket.write(
+          'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n',
+        );
+        socket.write('{"partial":true');
+        socket.end();
+      });
+      await new Promise<void>((resolve) => stuckServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (stuckServer.address() as AddressInfo).port;
+
+      try {
+        await expect(httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, 2000)).rejects.toThrow();
+      } finally {
+        stuckServer.close();
+      }
+    }, 4000);
+
+    // A reviewer found that `request.setTimeout` is an idle watchdog: it resets on every byte, so
+    // a server that drips one byte just under the window defeats it indefinitely. Verified
+    // empirically: with a 200ms timeout and a byte every 60ms, the request resolved at 1225ms —
+    // over 6x its configured budget. The fix is a single deadline covering the whole exchange.
+    it('rejects once the overall deadline elapses even under a steady drip of bytes', async () => {
+      const TOTAL_BYTES = 20;
+      const DRIP_INTERVAL_MS = 60;
+      const TIMEOUT_MS = 200;
+      const dripServer = net.createServer((socket) => {
+        // Once the client hits its deadline it destroys its end of the connection; the drip
+        // keeps trying to write afterwards and would otherwise crash the process with an
+        // unhandled EPIPE. That is expected here and is not something the test needs to verify.
+        socket.on('error', () => undefined);
+        socket.write(
+          `HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: ${TOTAL_BYTES}\r\n\r\n`,
+        );
+        let sent = 0;
+        const drip = setInterval(() => {
+          if (sent >= TOTAL_BYTES || socket.destroyed) {
+            clearInterval(drip);
+            return;
+          }
+          socket.write('a');
+          sent += 1;
+        }, DRIP_INTERVAL_MS);
+        socket.on('close', () => clearInterval(drip));
+      });
+      await new Promise<void>((resolve) => dripServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (dripServer.address() as AddressInfo).port;
+
+      try {
+        const start = Date.now();
+        await expect(
+          httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, TIMEOUT_MS),
+        ).rejects.toThrow(/timed out/i);
+        // The drip alone runs for TOTAL_BYTES * DRIP_INTERVAL_MS = 1200ms; an idle-reset watchdog
+        // would let it run that long. The deadline must cut it off close to TIMEOUT_MS instead.
+        expect(Date.now() - start).toBeLessThan(TOTAL_BYTES * DRIP_INTERVAL_MS);
+      } finally {
+        dripServer.close();
+      }
+    }, 4000);
+
+    // Every other test above passes an explicit, short timeoutMs, so none of them would notice if
+    // the default itself regressed (mutation testing showed changing 30s to roughly 24 days still
+    // passes the suite). Assert on the exported constant directly instead of waiting 30 seconds.
+    it('defaults to 30 seconds when no timeout is given', () => {
+      expect(DEFAULT_TIMEOUT_MS).toBe(30_000);
+    });
+
+    // Pins that the deadline timer is actually cancelled once the response resolves — not just
+    // that a late fire is harmless by luck. Mutation testing showed that dropping the
+    // `clearTimeout` call on success still passes every behavioral test above, because a
+    // superfluous `request.destroy()` after the body is already captured has no visible effect on
+    // the resolved value. Spying on the global is the only way to observe the cleanup itself.
+    it('cancels the deadline timer once the response resolves', async () => {
+      const clearTimeoutSpy = jest.spyOn(global, 'clearTimeout');
+      const callsBefore = clearTimeoutSpy.mock.calls.length;
+
+      await httpFetch(`${base}/doc`, { headers: {} }, 10_000);
+
+      expect(clearTimeoutSpy.mock.calls.length).toBeGreaterThan(callsBefore);
+      clearTimeoutSpy.mockRestore();
+    });
+  });
+
+  describe('body cap', () => {
+    it('rejects a response larger than the byte limit, naming the limit', async () => {
+      const oversizedBody = 'a'.repeat(MAX_BODY_BYTES + 1024);
+      const oversizedServer = http.createServer((_request, response) => {
+        response.writeHead(200, { 'content-type': 'text/plain' }).end(oversizedBody);
+      });
+      await new Promise<void>((resolve) => oversizedServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (oversizedServer.address() as AddressInfo).port;
+
+      try {
+        await expect(
+          httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, 5000),
+        ).rejects.toThrow(new RegExp(`exceeded.*${MAX_BODY_BYTES}`, 's'));
+      } finally {
+        oversizedServer.close();
+      }
+    });
+
+    // A second settle attempt must not change an outcome that already landed. The cap rejection
+    // (and the request.destroy() that comes with it) happens first and is given time to complete;
+    // only then does the server independently tear its own side down too, which reaches the
+    // client as a request/response-level error on an already-destroyed request. Without the
+    // `settled` guard this would try to reject a second time with a different message
+    // (e.g. ECONNRESET); a Promise only ever keeps its first settled value, so this test checks
+    // that the outcome the caller actually sees is still the cap message, not that second error.
+    it('keeps the body-cap outcome when the connection also tears down shortly after', async () => {
+      const oversizedBody = Buffer.alloc(MAX_BODY_BYTES + 4096, 'a');
+      const raceServer = net.createServer((socket) => {
+        socket.on('error', () => undefined);
+        socket.write(
+          `HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: ${oversizedBody.length}\r\n\r\n`,
+        );
+        socket.write(oversizedBody);
+        // Long enough for the client to have already processed the oversized write and settled
+        // on its own cap rejection (sub-millisecond over loopback), well before this fires.
+        setTimeout(() => socket.destroy(), 100);
+      });
+      await new Promise<void>((resolve) => raceServer.listen(0, '127.0.0.1', () => resolve()));
+      const port = (raceServer.address() as AddressInfo).port;
+
+      try {
+        await expect(
+          httpFetch(`http://127.0.0.1:${port}/doc`, { headers: {} }, 5000),
+        ).rejects.toThrow(/exceeded/i);
+      } finally {
+        raceServer.close();
       }
     });
   });
