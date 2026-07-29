@@ -133,7 +133,7 @@ function buildPolicyMessage(violations: PolicyViolation[], allowed: OverridableF
   return (
     `The pipeline sets ${fieldList}, but the project policy does not allow overriding ${pronoun}. ` +
     `${enforcedSentences} ` +
-    `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Project Settings > Trivy Scanner.`
+    `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Collection Settings > Trivy Scanner.`
   );
 }
 
@@ -155,7 +155,7 @@ function normalizeRunnerAlias(alias: string | undefined): string | undefined {
 function selectRunner(runners: RunnerConfig[], requested: string | undefined): RunnerConfig {
   if (runners.length === 0) {
     throw new RunnerNotFoundError(
-      'The project has no runners configured. Add one in Project Settings > Trivy Scanner > Runners.',
+      'The collection has no runners configured. Add one in Collection Settings > Trivy Scanner > Runners.',
     );
   }
 
@@ -175,7 +175,7 @@ function selectRunner(runners: RunnerConfig[], requested: string | undefined): R
     }
     if (match.enabled === false) {
       throw new RunnerNotFoundError(
-        `Runner "${requested}" is disabled. Enable it in Project Settings > Trivy Scanner > Runners, or choose a different runner.`,
+        `Runner "${requested}" is disabled. Enable it in Collection Settings > Trivy Scanner > Runners, or choose a different runner.`,
       );
     }
     return match;
@@ -184,7 +184,7 @@ function selectRunner(runners: RunnerConfig[], requested: string | undefined): R
   const defaultRunner = runners.find((runner) => runner.isDefault);
   if (!defaultRunner) {
     throw new RunnerNotFoundError(
-      'No default runner is configured. Mark one runner as default in Project Settings > Trivy Scanner > Runners, or set the "runner" input.',
+      'No default runner is configured. Mark one runner as default in Collection Settings > Trivy Scanner > Runners, or set the "runner" input.',
     );
   }
   if (defaultRunner.enabled === false) {

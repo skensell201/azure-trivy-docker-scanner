@@ -38,7 +38,7 @@ export interface RunnerConfig {
   /**
    * Entered once by an administrator in the settings document, not supplied per pipeline:
    * the Extension Data Service is not a secret store, so `registryPassword` is stored in
-   * plain text and readable by anyone with extension-data read access to this project. Both
+   * plain text and readable by anyone with extension-data read access to this collection. Both
    * fields are optional together, but `validateRunner` rejects one being set without the other.
    */
   registryUsername?: string;

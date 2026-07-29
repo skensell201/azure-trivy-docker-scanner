@@ -1068,7 +1068,7 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     if (!allowed.includes(field)) {
       throw new PolicyViolationError(
         `The pipeline sets "${field}", but the project policy does not allow overriding it. ` +
-          `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Project Settings > Trivy Scanner.`,
+          `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Collection Settings > Trivy Scanner.`,
       );
     }
     return fromInputs;
@@ -1107,7 +1107,7 @@ function selectRunner(runners: RunnerConfig[], requested: string | undefined): R
 
   if (runners.length === 0) {
     throw new RunnerNotFoundError(
-      'The project has no runners configured. Add one in Project Settings > Trivy Scanner > Runners.',
+      'The collection has no runners configured. Add one in Collection Settings > Trivy Scanner > Runners.',
     );
   }
 
@@ -1126,7 +1126,7 @@ function selectRunner(runners: RunnerConfig[], requested: string | undefined): R
   const fallback = usable.find((runner) => runner.isDefault);
   if (!fallback) {
     throw new RunnerNotFoundError(
-      'No default runner is configured. Mark one runner as default in Project Settings > Trivy Scanner > Runners, or set the "runner" input.',
+      'No default runner is configured. Mark one runner as default in Collection Settings > Trivy Scanner > Runners, or set the "runner" input.',
     );
   }
   return fallback;
@@ -3725,7 +3725,7 @@ git commit -m "feat: sarif artifact, sbom generation and findings table"
 
 - [ ] **Step 1: Создать `src/task/task.json`**
 
-⚠️ Ни у одного input, кроме `scanType`, не должно быть `defaultValue`. Агент подставляет объявленные умолчания в переменные `INPUT_*` непустыми строками, и тогда `readInputs` не может отличить «пайплайн промолчал» от «пайплайн задал значение». Результат — либо молчаливое переопределение настройки администратора, либо, при строгом `allowOverrides`, падение каждой сборки с указанием поля, которого автор пайплайна не касался. Умолчания живут в настройках проекта и применяются в `ConfigResolver`; `defaultValue` у `scanType` допустим только потому, что это не поле политики.
+⚠️ Ни у одного input, кроме `scanType`, не должно быть `defaultValue`. Агент подставляет объявленные умолчания в переменные `INPUT_*` непустыми строками, и тогда `readInputs` не может отличить «пайплайн промолчал» от «пайплайн задал значение». Результат — либо молчаливое переопределение настройки администратора, либо, при строгом `allowOverrides`, падение каждой сборки с указанием поля, которого автор пайплайна не касался. Умолчания живут в настройках коллекции и применяются в `ConfigResolver`; `defaultValue` у `scanType` допустим только потому, что это не поле политики.
 
 `id` — фиксированный GUID таска; сгенерируйте свой один раз командой `node -e "console.log(require('crypto').randomUUID())"` и подставьте вместо значения ниже, после чего больше никогда не меняйте.
 
@@ -3774,7 +3774,7 @@ git commit -m "feat: sarif artifact, sbom generation and findings table"
       "type": "string",
       "label": "Runner alias",
       "required": false,
-      "helpMarkDown": "Alias from Project Settings > Trivy Scanner. Leave empty to use the default runner."
+      "helpMarkDown": "Alias from Collection Settings > Trivy Scanner. Leave empty to use the default runner."
     },
     { "name": "severities", "type": "string", "label": "Severities", "required": false, "groupName": "policy" },
     { "name": "scanners", "type": "string", "label": "Scanners", "required": false, "groupName": "policy" },
@@ -3883,7 +3883,7 @@ async function main(): Promise<void> {
 
     if (!defaults) {
       throw new Error(
-        'The project has no Trivy settings yet. Open Project Settings > Trivy Scanner and configure the database mirror and at least one runner.',
+        'The collection has no Trivy settings yet. Open Collection Settings > Trivy Scanner and configure the database mirror and at least one runner.',
       );
     }
 
@@ -3900,7 +3900,7 @@ async function main(): Promise<void> {
     ];
     if (issues.length > 0) {
       throw new Error(
-        `The Trivy settings for this project are invalid:\n${issues
+        `The Trivy settings for this collection are invalid:\n${issues
           .map((issue) => `  ${issue.field}: ${issue.message}`)
           .join('\n')}`,
       );
@@ -4172,11 +4172,11 @@ team approved.
 
 ## Why this instead of running trivy directly
 
-- **Curated runners.** Administrators register the allowed trivy images in Project Settings.
+- **Curated runners.** Administrators register the allowed trivy images in Collection Settings.
   Pipelines pick one by alias, so upgrading trivy everywhere is a single edit.
 - **Works in a closed network.** The vulnerability database comes from an internal OCI registry
   mirror and a persistent cache on the agent. No call ever leaves your network.
-- **One place for the gate.** Severity thresholds live in project settings; pipelines may
+- **One place for the gate.** Severity thresholds live in collection-wide settings; pipelines may
   override only what the policy allows.
 - **Readable results.** A Trivy tab on the build shows why the gate failed, the counts per
   severity, and every finding with filters.
@@ -4190,7 +4190,7 @@ team approved.
     target: myapp:$(Build.BuildId)
 ```
 
-Configure runners and defaults under **Project Settings > Trivy Scanner**.
+Configure runners and defaults under **Collection Settings > Trivy Scanner**.
 ```
 
 - [ ] **Step 4: Создать `README.md`**
@@ -4369,7 +4369,7 @@ npm run build:task
 node -e "process.env.INPUT_TARGET='app:1'; require('./TrivyScan/index.js')" 2>&1 | head -5
 ```
 
-Expected: процесс стартует и падает на отсутствии переменных агента (сообщение про настройки проекта или про `System.CollectionUri`), но **не** на `Cannot find module`. Если появляется `Cannot find module '../shared/types'`, поправьте `scripts/build-task.js`: положите содержимое `build/` целиком в `TrivyScan/`, а точкой входа в `task.json` укажите `task/index.js`.
+Expected: процесс стартует и падает на отсутствии переменных агента (сообщение про настройки коллекции или про `System.CollectionUri`), но **не** на `Cannot find module`. Если появляется `Cannot find module '../shared/types'`, поправьте `scripts/build-task.js`: положите содержимое `build/` целиком в `TrivyScan/`, а точкой входа в `task.json` укажите `task/index.js`.
 
 - [ ] **Step 5: Создать `.github/workflows/ci.yml`**
 

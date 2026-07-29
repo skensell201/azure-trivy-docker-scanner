@@ -25,10 +25,12 @@ Windows agents are not supported in v1.
 
 ## Configuration
 
-This version has no administration UI: the runner catalog and the severity/gate defaults are
-centrally managed settings, but you configure them by writing two JSON documents directly
-through the Azure DevOps Extension Data REST API. An administration UI for this is planned for
-a later release.
+Administration is collection-wide, not per-project: there is one runner catalog and one set of
+severity/gate defaults for the whole Azure DevOps collection, and every project's pipelines
+consume the same catalog and defaults. There is no per-project configuration. This version has
+no administration UI: you configure the collection-wide settings by writing two JSON documents
+directly through the Azure DevOps Extension Data REST API. An administration UI for this is
+planned for a later release.
 
 Both documents live in the extension's `%24settings` collection (`%24` is the URL-encoded `$`
 that the Extension Data Service requires in the collection name). Set these once:
@@ -59,7 +61,7 @@ If a runner carries `registryUsername`/`registryPassword`, the task runs
 before pulling it, so a private corporate registry works even though this task is otherwise
 air-gapped. **The password is stored in plain text in this settings document** — the Azure
 DevOps Extension Data Service is not a secret store — and is readable by anyone who has
-extension-data read access to this project (the same access that lets someone read the document
+extension-data read access to this collection (the same access that lets someone read the document
 back with the `curl` command above). Grant that access accordingly, and prefer a scoped
 service/robot account over a personal one for `registryUsername`.
 
@@ -79,7 +81,7 @@ required field, since build agents have no internet access. Everything else — 
 omitted (see `src/shared/types.ts` for the full shape). `dbRegistryUsername` and
 `dbRegistryPassword` are optional but must be set together, same as the runner catalog's
 credential pair above, and carry the **same plain-text-storage caveat**: anyone with
-extension-data read access to this project can read this password back.
+extension-data read access to this collection can read this password back.
 
 Trivy pulls its database from *inside* the container, so these credentials reach it through
 `TRIVY_USERNAME`/`TRIVY_PASSWORD` in the container's environment — the same two variables the

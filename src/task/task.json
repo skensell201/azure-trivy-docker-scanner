@@ -42,7 +42,7 @@
       "type": "string",
       "label": "Runner alias",
       "required": false,
-      "helpMarkDown": "Alias from Project Settings > Trivy Scanner. Leave empty to use the default runner."
+      "helpMarkDown": "Alias from Collection Settings > Trivy Scanner. Leave empty to use the default runner."
     },
     { "name": "severities", "type": "string", "label": "Severities", "required": false, "groupName": "policy" },
     { "name": "scanners", "type": "string", "label": "Scanners", "required": false, "groupName": "policy" },

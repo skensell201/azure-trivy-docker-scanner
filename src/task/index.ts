@@ -106,7 +106,7 @@ async function main(): Promise<void> {
 
     if (!defaults) {
       throw new Error(
-        'The project has no Trivy settings yet. Open Project Settings > Trivy Scanner and configure the database mirror and at least one runner.',
+        'The collection has no Trivy settings yet. Open Collection Settings > Trivy Scanner and configure the database mirror and at least one runner.',
       );
     }
 
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
     ];
     if (issues.length > 0) {
       throw new Error(
-        `The Trivy settings for this project are invalid:\n${issues
+        `The Trivy settings for this collection are invalid:\n${issues
           .map((issue) => `  ${issue.field}: ${issue.message}`)
           .join('\n')}`,
       );
