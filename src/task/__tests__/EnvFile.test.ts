@@ -70,4 +70,21 @@ describe('writeEnvFile', () => {
     writeEnvFile(dir, 'scan-0', { A: 'second' });
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
+
+  // If a symlink is ever pre-planted at the env file path (e.g. by another process
+  // sharing the temp directory), writing through it without O_NOFOLLOW would leak
+  // registry credentials into whatever the attacker chose as the link target, and the
+  // follow-up chmodSync would then loosen permissions on that target instead. The open
+  // must refuse to follow the link outright rather than write through it.
+  it('refuses to follow a symlink planted at the target path, leaving its target untouched', () => {
+    const outside = path.join(dir, 'outside.txt');
+    fs.writeFileSync(outside, 'do not touch');
+
+    const file = writeEnvFile(dir, 'scan-0', { A: 'placeholder' });
+    fs.rmSync(file);
+    fs.symlinkSync(outside, file);
+
+    expect(() => writeEnvFile(dir, 'scan-0', { A: 'attacker-controlled' })).toThrow();
+    expect(fs.readFileSync(outside, 'utf8')).toBe('do not touch');
+  });
 });
