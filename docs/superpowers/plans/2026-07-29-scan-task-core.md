@@ -874,6 +874,20 @@ git add src/shared/validation.ts src/shared/__tests__/validation.test.ts
 git commit -m "feat: shared validation rules for runners and defaults"
 ```
 
+- [ ] **Step 6: Ужесточить модуль против непроверенных документов (по итогам ревью)**
+
+Обещание «возвращаем список проблем, а не бросаем» выполняется только для входа, который уже соответствует типам, — то есть ровно для случая, который не нуждается в валидации. Таск же скармливает сюда результат `JSON.parse` из документа, правимого руками через REST. Сейчас `validateCatalog(null)` даёт `TypeError: runners is not iterable`, а `"severities": null` — `Cannot read properties of null`, потому что `null !== undefined` и охранное условие пропускает такое значение. В логе сборки это выглядит как внутренняя ошибка вместо «документ настроек испорчен».
+
+Поэтому:
+
+- каждая из трёх функций начинается с проверки формы: не массив → одна проблема на поле `runners`; не объект → проблема на поле `runner`/`defaults`; элемент каталога не объект → проблема с указанием индекса;
+- значения не того типа не проходят молча: `timeoutMinutes` проверяется через `typeof === 'number' && Number.isFinite && > 0` (иначе `NaN` уезжает в докер-команду), `severities` и `scanners` — через `Array.isArray` (иначе строка `'HIGH'` считается непустым списком), `alias`, `image`, `dbRepository` — через `typeof === 'string'`;
+- тег образа проверяется шаблоном `^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`, иначе проходят `reg.corp/trivy:` и `reg.corp/trivy:0.58.1 --privileged`. Ссылки по digest (`@sha256:...`) распознаются отдельно и принимаются намеренно: digest — самая воспроизводимая ссылка из возможных, отвергать её было бы ровно наоборот;
+- сообщения дедуплицируются (один и тот же дублирующийся alias сообщается один раз), а сообщение про раннер по умолчанию называет виновников: `found 2: "baseline", "hardened"`;
+- на `validateCatalog` вешается док-комментарий о том, что он проверяет только межраннерные инварианты: сейчас каталог из одного раннера с плохим alias и тегом `latest` получает от него чистый вердикт, и ничто не подсказывает вызывающему, что нужно ещё пройтись `validateRunner` по элементам.
+
+Тесты, которых не хватало (мутационное тестирование показало, что без них правки реализации проходят весь набор): отказ на пустом `scanners` — единственное правило `validateDefaults`, не покрытое вообще; принятие раннера с опущенным `enabled` (в `types.ts` задокументировано, что отсутствие означает «включён»); границы длины alias — 2 и 32 символа; приём `reg.corp/latest-trivy:0.58.1`, чтобы правило про `latest` смотрело на тег, а не на подстроку имени; и три формы digest-ссылок.
+
 ---
 
 ## Task 6: Слияние конфигурации и политика переопределений
@@ -3694,6 +3708,7 @@ import { readInputs } from './inputs';
 import { ChildProcessRunner } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { runScan } from './run';
+import { validateCatalog, validateDefaults, validateRunner } from '../shared/validation';
 import { AgentContext, DefaultsConfig, RunnerConfig } from '../shared/types';
 
 const PUBLISHER = 'iksoftware';
@@ -3761,6 +3776,25 @@ async function main(): Promise<void> {
     if (!defaults) {
       throw new Error(
         'The project has no Trivy settings yet. Open Project Settings > Trivy Scanner and configure the database mirror and at least one runner.',
+      );
+    }
+
+    // The documents are hand-editable through the REST API, so validate before building a docker command from them.
+    const issues = [
+      ...validateDefaults(defaults),
+      ...validateCatalog(runners),
+      ...runners.flatMap((runner, index) =>
+        validateRunner(runner).map((issue) => ({
+          field: `runners[${index}].${issue.field}`,
+          message: issue.message,
+        })),
+      ),
+    ];
+    if (issues.length > 0) {
+      throw new Error(
+        `The Trivy settings for this project are invalid:\n${issues
+          .map((issue) => `  ${issue.field}: ${issue.message}`)
+          .join('\n')}`,
       );
     }
 
