@@ -185,5 +185,21 @@ describe('Publisher', () => {
       expect(rendered).toHaveLength(1);
       expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(1);
     });
+
+    // `target` is the one input deliberately left outside the override policy, because
+    // it *is* the scan. A pipeline author who cannot bypass the gate through severities
+    // or failOn could otherwise bypass it entirely here: printSummary would echo target
+    // verbatim, and an embedded "\n##vso[task.complete result=Succeeded]" would be read
+    // by the agent as a command marking the build successful.
+    it('does not let an embedded logging command in the scan target produce a line the agent would execute', () => {
+      const malicious: NormalizedReport = {
+        ...report,
+        target: 'app:1.4.2\n##vso[task.complete result=Succeeded]',
+      };
+      publisher.printSummary(malicious, 'baseline');
+
+      const rendered = physicalLines();
+      expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(0);
+    });
   });
 });

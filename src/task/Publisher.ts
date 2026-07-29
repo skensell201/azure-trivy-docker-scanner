@@ -18,14 +18,23 @@ export class Publisher {
   constructor(private readonly write: LineWriter = (line) => console.log(line)) {}
 
   /**
-   * The agent parses stdout line by line, and a line starting with `##vso[` is a
-   * command it executes. Every caller-supplied value that lands inside a logging
-   * command line — finding titles, package names, versions, file paths — must be
-   * routed through here first. Two defences, both needed:
+   * Any stdout line beginning with `##vso[` is executed by the agent as a command,
+   * regardless of which code emitted it or which field the text came from. That means
+   * every value interpolated anywhere in this class — finding titles, package names,
+   * versions, file paths, the scan target, the runner alias, image and versions — must
+   * be routed through here before it reaches a `write()` call. It is tempting to treat
+   * some fields as "safe" because they look administrator-controlled, but `target` is
+   * proof that intuition fails: it is the one input deliberately left outside the
+   * override policy (it *is* the scan), so a pipeline author who cannot bypass the gate
+   * through `severities` or `failOn` could otherwise bypass it entirely here. Do not add
+   * a sixth interpolated field without sanitizing it.
+   *
+   * Two defences, both needed:
    *  - a raw newline would start a second physical line, so newlines become a space;
    *  - a literal "##vso[" would make that second line a command of the attacker's
-   *    choosing (e.g. `task.complete result=Succeeded`, masking a failed scan), so the
-   *    "##" prefix is broken while leaving the rest of the text readable.
+   *    choosing (e.g. `task.complete result=Succeeded`, marking a failed build as
+   *    successful), so the "##" prefix is broken while leaving the rest of the text
+   *    readable.
    * This is defence in depth: ReportParser also normalises these fields at the point
    * they enter the data model, but that does not make this boundary check redundant —
    * a future caller of Publisher need not go through ReportParser at all.
@@ -95,14 +104,20 @@ export class Publisher {
   }
 
   printSummary(report: NormalizedReport, runnerAlias: string): void {
-    this.write(
-      `Trivy scan of ${report.target} using runner ${runnerAlias} (${report.runner.image})`,
-    );
+    // `target` is a pipeline input, not an admin-controlled one — see the note on
+    // sanitizeForLogLine. It goes through the same helper as every other value here.
+    const target = this.sanitizeForLogLine(report.target);
+    const runner = this.sanitizeForLogLine(runnerAlias);
+    const image = this.sanitizeForLogLine(report.runner.image);
+
+    this.write(`Trivy scan of ${target} using runner ${runner} (${image})`);
     if (report.runner.trivyVersion) {
-      this.write(`Trivy version: ${report.runner.trivyVersion}`);
+      this.write(`Trivy version: ${this.sanitizeForLogLine(report.runner.trivyVersion)}`);
     }
     if (report.runner.dbUpdatedAt) {
-      this.write(`Vulnerability database updated at ${report.runner.dbUpdatedAt}`);
+      this.write(
+        `Vulnerability database updated at ${this.sanitizeForLogLine(report.runner.dbUpdatedAt)}`,
+      );
     }
     for (const severity of [...SEVERITY_ORDER].reverse()) {
       this.write(`  ${severity}: ${report.counts[severity]}`);
