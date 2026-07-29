@@ -3,5 +3,6 @@ node_modules/
 dist/
 out/
 build/
+TrivyScan/
 .DS_Store
 .taskkey

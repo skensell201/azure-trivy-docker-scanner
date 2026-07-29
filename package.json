@@ -2,8 +2,11 @@
   "name": "azure-trivy-docker-scanner",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
+    "build:task": "npm run build && node scripts/build-task.js",
+    "package": "npm run build:task && tfx extension create --manifest-globs vss-extension.json --output-path out",
     "test": "jest",
     "lint": "eslint src test --ext .ts --no-error-on-unmatched-pattern",
     "typecheck": "tsc --noEmit -p tsconfig.json"
