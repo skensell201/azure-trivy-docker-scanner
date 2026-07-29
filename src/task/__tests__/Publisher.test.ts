@@ -73,4 +73,38 @@ describe('Publisher', () => {
     expect(lines.join('\n')).toContain('CRITICAL: 1');
     expect(lines.join('\n')).toContain('baseline');
   });
+
+  // A Windows agent path carries a drive letter and backslashes. The logging command
+  // syntax only parses up to the closing `]`; everything after it, including the path,
+  // is opaque data. Pinning this because the plan text only ever exercises POSIX paths.
+  it('passes a Windows-style path through unchanged, after the closing bracket', () => {
+    publisher.attachReport('C:\\agent\\_work\\1\\s\\.trivy\\report-0.json', 0);
+    expect(lines).toEqual([
+      '##vso[task.addattachment type=trivy.report;name=trivy-report-0;]C:\\agent\\_work\\1\\s\\.trivy\\report-0.json',
+    ]);
+  });
+
+  it('gives two scans in the same job distinct attachment names', () => {
+    publisher.attachReport('/agent/_work/1/s/.trivy/report-0.json', 0);
+    publisher.attachReport('/agent/_work/1/s/.trivy/report-1.json', 1);
+    expect(lines[0]).toContain('name=trivy-report-0;');
+    expect(lines[1]).toContain('name=trivy-report-1;');
+  });
+
+  it('prints a readable all-zero summary for a clean report, in descending severity order', () => {
+    const clean: NormalizedReport = {
+      ...report,
+      findings: [],
+      counts: { UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 },
+    };
+    publisher.printSummary(clean, 'baseline');
+    const severityLines = lines.filter((line) => /^\s*(CRITICAL|HIGH|MEDIUM|LOW|UNKNOWN):/.test(line));
+    expect(severityLines).toEqual([
+      '  CRITICAL: 0',
+      '  HIGH: 0',
+      '  MEDIUM: 0',
+      '  LOW: 0',
+      '  UNKNOWN: 0',
+    ]);
+  });
 });
