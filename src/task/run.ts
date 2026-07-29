@@ -144,8 +144,11 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   } finally {
     // The env file holds registry credentials: it must be gone whether the scan
     // succeeded, failed, an extra-format run failed, or any process runner call above
-    // threw outright.
-    removeEnvFile(envFile);
+    // threw outright. removeEnvFile itself never throws (a delete failure must not
+    // replace the real scan outcome from the try above), so a failed removal is only
+    // reported if this callback is wired up -- without it the credentials file is left
+    // on disk with nothing anywhere saying so.
+    removeEnvFile(envFile, (message) => publisher.warn(message));
   }
 
   const reportPath = hostReportPath(config);

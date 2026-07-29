@@ -184,6 +184,37 @@ describe('runScan', () => {
     expect(fs.readdirSync(path.join(workspace, 'temp'))).toEqual([]);
   });
 
+  // EnvFile.removeEnvFile never throws (a delete failure must not replace the real scan
+  // outcome), so a failed removal is only visible if run.ts wires its onWarning callback
+  // through to the publisher. Without that wiring this failure is completely silent and
+  // the registry credentials file is left behind with nobody told.
+  itIfPermissionsEnforced(
+    'warns naming the env file when it cannot be removed, without affecting the scan result',
+    async () => {
+      const runner = new FakeRunner(() => {
+        // The env file already exists by the time the scan process runs (writeEnvFile
+        // ran before this call). Denying write on its containing directory makes the
+        // unlink inside removeEnvFile fail with EACCES once the `finally` runs.
+        fs.chmodSync(agent.tempDir, 0o555);
+        writeReport();
+      });
+      try {
+        const result = await invoke(runner);
+        expect(result.gate.outcome).toBe('failed');
+        expect(
+          lines.some(
+            (line) =>
+              line.includes('type=warning') &&
+              line.includes('trivy-scan-0.env') &&
+              /failed to remove|could not remove/i.test(line),
+          ),
+        ).toBe(true);
+      } finally {
+        fs.chmodSync(agent.tempDir, 0o755);
+      }
+    },
+  );
+
   it('reports a docker failure as an infrastructure error, not as findings', async () => {
     const runner = new FakeRunner();
     runner.results = [{ exitCode: 125, stdout: '', stderr: 'Cannot connect to the Docker daemon', timedOut: false }];
