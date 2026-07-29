@@ -134,11 +134,12 @@ module.exports = {
 ```bash
 npm install
 mkdir -p src/shared src/task test/fixtures && touch src/shared/.gitkeep src/task/.gitkeep test/fixtures/.gitkeep
-npm run typecheck
 npx jest --passWithNoTests
 ```
 
-Expected: `typecheck` завершается без вывода ошибок, jest печатает `No tests found, exiting with code 0`.
+Expected: jest печатает `No tests found, exiting with code 0`.
+
+`npm run typecheck` на этом шаге запускать бесполезно: пока под `src/` нет ни одного `.ts`, `tsc` жёстко падает с `TS18003: No inputs were found in config file`. Это не ошибка конфигурации и подавить её флагом нельзя — проверка типов становится осмысленной начиная с Task 3, где появляются первые исходники.
 
 - [ ] **Step 6: Commit**
 
