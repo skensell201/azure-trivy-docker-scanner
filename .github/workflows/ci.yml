@@ -3,6 +3,9 @@ name: CI
 on:
   push:
     branches: [main]
+    # Without this the package job below can never run: it is gated on refs/tags/v, but a tag
+    # push would not trigger the workflow at all if only branches were listed here.
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 
