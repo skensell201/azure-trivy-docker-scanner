@@ -271,4 +271,40 @@ describe('Publisher', () => {
       expect(lines).toEqual(['##vso[task.logissue type=warning]sarif run failed']);
     });
   });
+
+  describe('sanitizeForLogLine robustness against unexpected types', () => {
+    // parseVersion reads `Version` straight out of `trivy version --format json`. A
+    // misbehaving runner image can hand back {"Version": 42} instead of a string, and
+    // that number reaches sanitizeForLogLine through trivyVersion despite RunnerInfo
+    // declaring it a string. ReportParser is being fixed to coerce its own output, but
+    // this is the boundary every other module trusts, and a boundary that crashes on an
+    // unexpected type after a successful scan is not much of a boundary.
+    it('stringifies a numeric trivy version instead of throwing', () => {
+      const malformed = {
+        ...report,
+        runner: { ...report.runner, trivyVersion: 42 as unknown as string },
+      };
+      expect(() => publisher.printSummary(malformed, 'baseline')).not.toThrow();
+      expect(lines.join('\n')).toContain('42');
+    });
+
+    it('treats null as an empty string instead of printing the word "null"', () => {
+      const malformed = { ...report, target: null as unknown as string };
+      expect(() => publisher.printSummary(malformed, 'baseline')).not.toThrow();
+      expect(lines.join('\n')).not.toContain('null');
+    });
+
+    it('treats undefined as an empty string instead of printing the word "undefined"', () => {
+      const malformed = { ...report, target: undefined as unknown as string };
+      expect(() => publisher.printSummary(malformed, 'baseline')).not.toThrow();
+      expect(lines.join('\n')).not.toContain('undefined');
+    });
+
+    it('stringifies an object instead of throwing, and still emits a single safe line', () => {
+      const malformed = { ...report, target: { unexpected: true } as unknown as string };
+      expect(() => publisher.printSummary(malformed, 'baseline')).not.toThrow();
+      const rendered = lines.flatMap((line) => line.split('\n'));
+      expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(0);
+    });
+  });
 });

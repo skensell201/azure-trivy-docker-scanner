@@ -38,8 +38,21 @@ export class Publisher {
    * This is defence in depth: ReportParser also normalises these fields at the point
    * they enter the data model, but that does not make this boundary check redundant —
    * a future caller of Publisher need not go through ReportParser at all.
+   *
+   * The parameter type is deliberately `unknown`, not `string`: parseVersion reads
+   * `Version` straight out of `trivy version --format json`, and a misbehaving runner
+   * image can hand back `{"Version": 42}`, giving `trivyVersion` a number despite
+   * `RunnerInfo` declaring it a string. ReportParser is fixed to coerce its own output,
+   * but this is the boundary every other module trusts, and a boundary that crashes on
+   * an unexpected type after a successful scan is not much of a boundary. `null` and
+   * `undefined` become an empty string rather than the literal words "null"/"undefined"
+   * in a build summary; anything else is stringified before the replacements above run.
    */
-  private sanitizeForLogLine(text: string): string {
+  private sanitizeForLogLine(value: unknown): string {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    const text = typeof value === 'string' ? value : String(value);
     const singleLine = text.replace(/\r\n|\r|\n/g, ' ');
     const inert = singleLine.replace(/##vso\[/gi, '#-vso[');
     return inert.replace(/\s+/g, ' ').trim();
