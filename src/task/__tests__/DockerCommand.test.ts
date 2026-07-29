@@ -4,6 +4,7 @@ import {
   buildTrivyEnv,
   containerReportPath,
   hostReportPath,
+  RESERVED_TRIVY_FLAGS,
 } from '../DockerCommand';
 import { ResolvedScanConfig } from '../../shared/types';
 
@@ -59,6 +60,14 @@ describe('buildScanArgs', () => {
       'vuln,secret',
       '--timeout',
       '10m',
+      // Re-asserted after extraTrivyArgs (empty here) so a pipeline can never
+      // move these three flags: see the "re-asserts" test below.
+      '--format',
+      'json',
+      '--output',
+      '/workspace/.trivy/report-0.json',
+      '--exit-code',
+      '0',
       'app:1.4.2',
     ]);
   });
@@ -88,6 +97,21 @@ describe('buildScanArgs', () => {
     expect(args[args.length - 1]).toBe('app:1.4.2');
   });
 
+  // extraDockerArgs is reachable only by an administrator (TaskInputs carries
+  // no such field), and that same administrator already chooses the runner
+  // image, so it is deliberately left unrestricted here - contrast with the
+  // reserved-flag rejection applied to extraTrivyArgs below, which IS
+  // pipeline-reachable.
+  it('passes extraDockerArgs through unrestricted, since it is administrator-only', () => {
+    const args = buildScanArgs(
+      config({
+        runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', extraDockerArgs: '--privileged' },
+      }),
+      '/tmp/e',
+    );
+    expect(args).toContain('--privileged');
+  });
+
   it('adds ignore-unfixed and skip-db-update flags when enabled', () => {
     const args = buildScanArgs(config({ ignoreUnfixed: true, skipDbUpdate: true }), '/tmp/e');
     expect(args).toContain('--ignore-unfixed');
@@ -114,22 +138,48 @@ describe('buildScanArgs', () => {
     expect(args).toContain('/workspace/.trivy/report-3.json');
   });
 
-  // The host needs to read the report back after the container exits. A
-  // `workingDirectory` containing ".." changes the container's `-w`, but the
-  // report path is computed independently of it, so it always stays under
-  // the mounted workspace regardless of what workingDirectory does to `-w`.
-  it('keeps the report output path under the workspace mount even when workingDirectory escapes it', () => {
-    const args = buildScanArgs(config({ workingDirectory: '../../etc' }), '/tmp/e');
+  it('nests the working directory under the workspace mount', () => {
+    const args = buildScanArgs(config({ workingDirectory: 'subdir' }), '/tmp/e');
+    expect(args[args.indexOf('-w') + 1]).toBe('/workspace/subdir');
+  });
+
+  // The report path is computed from containerReportPath/hostReportPath,
+  // which never look at workingDirectory at all, so the host can always read
+  // the report back regardless of which (non-escaping) working directory a
+  // scan uses. An escaping workingDirectory is rejected outright instead of
+  // reaching this far - see the rejection test below.
+  it('keeps the report output path under the workspace mount independent of workingDirectory', () => {
+    const args = buildScanArgs(config({ workingDirectory: 'subdir' }), '/tmp/e');
     expect(args).toContain('/workspace/.trivy/report-0.json');
-    expect(containerReportPath(config({ workingDirectory: '../../etc' }))).toBe(
+    expect(containerReportPath(config({ workingDirectory: 'subdir' }))).toBe(
       '/workspace/.trivy/report-0.json',
     );
   });
 
-  // extraTrivyArgs is appended after our own flags precisely so a later
-  // occurrence cannot win the cobra "last flag wins" race against
-  // --severity/--scanners, and the scan target must remain the final
-  // positional argument no matter what else is configured.
+  // Silently clamping a ".." escape would hide the mistake: a filesystem scan
+  // with a relative target would then silently scan the runner image instead
+  // of the checked-out sources and could pass the gate with zero findings.
+  it('rejects a workingDirectory that escapes the mounted workspace', () => {
+    expect(() => buildScanArgs(config({ workingDirectory: '../../etc' }), '/tmp/e')).toThrow(
+      /workingDirectory.*escapes/is,
+    );
+  });
+
+  it('rejects an ignoreFile that escapes the mounted workspace', () => {
+    expect(() =>
+      buildScanArgs(config({ ignoreFile: '../../../etc/passwd' }), '/tmp/e'),
+    ).toThrow(/ignoreFile.*escapes/is);
+  });
+
+  // Ordering alone offers no protection here: appending extraTrivyArgs after
+  // our own flags is exactly what lets a later, user-supplied occurrence win
+  // cobra's "last flag wins" scalar-flag race. --severity/--scanners are
+  // actually the two flags this ordering protects least, since trivy treats
+  // them as accumulating flags rather than last-write-wins scalars. What
+  // actually protects the machine-critical flags is the reserved-flag
+  // rejection plus re-asserting --format/--output/--exit-code after
+  // extraTrivyArgs (see the tests below). The only guarantee this test pins
+  // is that the scan target remains the final positional argument.
   it('places --severity and --scanners strictly before extraTrivyArgs, with the target genuinely last', () => {
     const args = buildScanArgs(
       config({ ignoreFile: '.trivyignore', extraTrivyArgs: '--offline-scan' }),
@@ -138,6 +188,66 @@ describe('buildScanArgs', () => {
     expect(args.indexOf('--severity')).toBeLessThan(args.indexOf('--offline-scan'));
     expect(args.indexOf('--scanners')).toBeLessThan(args.indexOf('--offline-scan'));
     expect(args[args.length - 1]).toBe(config().target);
+  });
+
+  it('re-asserts --format, --output and --exit-code after extraTrivyArgs so they cannot be overridden', () => {
+    const args = buildScanArgs(config({ extraTrivyArgs: '--offline-scan' }), '/tmp/e');
+    expect(args[args.length - 1]).toBe('app:1.4.2');
+    expect(args.slice(args.length - 7, args.length - 1)).toEqual([
+      '--format',
+      'json',
+      '--output',
+      '/workspace/.trivy/report-0.json',
+      '--exit-code',
+      '0',
+    ]);
+  });
+
+  it('always sets --exit-code to 0 so the gate is computed by us, not by trivy', () => {
+    const args = buildScanArgs(config(), '/tmp/e');
+    expect(args[args.indexOf('--exit-code') + 1]).toBe('0');
+  });
+
+  it('always requests --format json so the parser can read the report', () => {
+    const args = buildScanArgs(config(), '/tmp/e');
+    expect(args[args.indexOf('--format') + 1]).toBe('json');
+  });
+});
+
+describe('extraTrivyArgs reserved flags', () => {
+  it('lists exactly the flags this builder already controls', () => {
+    expect(RESERVED_TRIVY_FLAGS).toEqual([
+      '--format',
+      '-f',
+      '--output',
+      '-o',
+      '--exit-code',
+      '--severity',
+      '-s',
+      '--scanners',
+      '--ignore-unfixed',
+      '--skip-db-update',
+      '--ignorefile',
+      '--timeout',
+    ]);
+  });
+
+  it.each(RESERVED_TRIVY_FLAGS)('refuses "%s value" in extraTrivyArgs', (flag) => {
+    expect(() => buildScanArgs(config({ extraTrivyArgs: `${flag} something` }), '/tmp/e')).toThrow();
+  });
+
+  it.each(RESERVED_TRIVY_FLAGS)('refuses "%s=value" in extraTrivyArgs', (flag) => {
+    expect(() => buildScanArgs(config({ extraTrivyArgs: `${flag}=something` }), '/tmp/e')).toThrow();
+  });
+
+  it('names the offending flag and points at the input that controls it', () => {
+    expect(() => buildScanArgs(config({ extraTrivyArgs: '--severity LOW' }), '/tmp/e')).toThrow(
+      /--severity.*severities/s,
+    );
+  });
+
+  it('lets an unreserved flag through', () => {
+    expect(() => buildScanArgs(config({ extraTrivyArgs: '--offline-scan' }), '/tmp/e')).not.toThrow();
   });
 });
 

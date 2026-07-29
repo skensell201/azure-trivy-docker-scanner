@@ -289,4 +289,35 @@ describe('validateDefaults', () => {
     const issues = validateDefaults(defaults({ scanners: [] }));
     expect(issues).toEqual([{ field: 'scanners', message: expect.stringContaining('at least one') }]);
   });
+
+  // --- cacheDir mount safety: a hand-edited document could point -v at host root ---
+
+  it('accepts a well-formed cacheDir', () => {
+    expect(validateDefaults(defaults({ cacheDir: '/agent/_trivy-cache' }))).toEqual([]);
+  });
+
+  it('rejects a non-string cacheDir instead of crashing', () => {
+    const issues = validateDefaults(defaults({ cacheDir: 5 as unknown as string }));
+    expect(issues).toEqual([{ field: 'cacheDir', message: expect.stringContaining('string') }]);
+  });
+
+  it('rejects a relative cacheDir', () => {
+    const issues = validateDefaults(defaults({ cacheDir: 'relative/cache' }));
+    expect(issues).toEqual([{ field: 'cacheDir', message: expect.stringContaining('absolute') }]);
+  });
+
+  it('rejects cacheDir set to the filesystem root, which would mount host root read-write', () => {
+    const issues = validateDefaults(defaults({ cacheDir: '/' }));
+    expect(issues).toEqual([{ field: 'cacheDir', message: expect.stringContaining('root') }]);
+  });
+
+  it('rejects a bare root-level directory such as /etc as cacheDir', () => {
+    const issues = validateDefaults(defaults({ cacheDir: '/etc' }));
+    expect(issues).toEqual([{ field: 'cacheDir', message: expect.stringContaining('top-level') }]);
+  });
+
+  it('rejects another bare root-level directory such as /var as cacheDir', () => {
+    const issues = validateDefaults(defaults({ cacheDir: '/var' }));
+    expect(issues).toEqual([{ field: 'cacheDir', message: expect.stringContaining('top-level') }]);
+  });
 });

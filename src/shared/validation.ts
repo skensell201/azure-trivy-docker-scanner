@@ -1,3 +1,4 @@
+import * as path from 'path';
 import { splitArgs } from './args';
 
 export interface ValidationIssue {
@@ -195,6 +196,31 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
   if (config.scanners !== undefined) {
     if (!Array.isArray(config.scanners) || config.scanners.length === 0) {
       issues.push({ field: 'scanners', message: 'Select at least one scanner.' });
+    }
+  }
+
+  if (config.cacheDir !== undefined) {
+    const cacheDir = config.cacheDir;
+    if (typeof cacheDir !== 'string' || cacheDir.trim().length === 0) {
+      issues.push({ field: 'cacheDir', message: 'cacheDir must be a non-empty string.' });
+    } else if (!cacheDir.startsWith('/')) {
+      issues.push({
+        field: 'cacheDir',
+        message: 'cacheDir must be an absolute path, for example /agent/_trivy-cache.',
+      });
+    } else {
+      // DockerCommand mounts cacheDir read-write as `-v cacheDir:/root/.cache/trivy`.
+      // Fewer than two path segments means the filesystem root itself
+      // (0 segments) or a single top-level directory such as /etc or /var
+      // (1 segment) - either would mount a directory no scan container
+      // should be able to write into.
+      const segments = path.posix.normalize(cacheDir).split('/').filter((segment) => segment.length > 0);
+      if (segments.length < 2) {
+        issues.push({
+          field: 'cacheDir',
+          message: `cacheDir "${cacheDir}" is the filesystem root or a bare top-level directory; mounting it read-write into the scan container is not allowed. Use a dedicated subdirectory, for example /agent/_trivy-cache.`,
+        });
+      }
     }
   }
 
