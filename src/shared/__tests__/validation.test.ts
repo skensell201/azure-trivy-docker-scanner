@@ -45,6 +45,23 @@ describe('validateRunner', () => {
       { field: 'extraDockerArgs', message: expect.stringContaining('Unterminated quote') },
     ]);
   });
+
+  it('reports every failing field at once instead of stopping at the first', () => {
+    const issues = validateRunner(runner({ alias: 'Bad Alias', image: '' }));
+    expect(issues).toEqual([
+      { field: 'alias', message: expect.stringContaining('lowercase') },
+      { field: 'image', message: expect.stringContaining('required') },
+    ]);
+  });
+
+  it('rejects a missing tag on a registry with an explicit port, without confusing the port for a tag', () => {
+    const issues = validateRunner(runner({ image: 'reg.corp:5000/trivy' }));
+    expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('tag') }]);
+  });
+
+  it('accepts an explicit tag on a registry with an explicit port', () => {
+    expect(validateRunner(runner({ image: 'reg.corp:5000/trivy:0.58.1' }))).toEqual([]);
+  });
 });
 
 describe('validateCatalog', () => {
@@ -67,6 +84,11 @@ describe('validateCatalog', () => {
   it('rejects a catalog whose only default runner is disabled', () => {
     const issues = validateCatalog([runner({ enabled: false })]);
     expect(issues).toEqual([{ field: 'isDefault', message: expect.stringContaining('disabled') }]);
+  });
+
+  it('rejects an empty catalog instead of throwing', () => {
+    const issues = validateCatalog([]);
+    expect(issues).toEqual([{ field: 'isDefault', message: expect.stringContaining('exactly one') }]);
   });
 });
 
