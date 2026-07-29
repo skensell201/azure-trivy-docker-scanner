@@ -48,7 +48,14 @@
     { "name": "scanners", "type": "string", "label": "Scanners", "required": false, "groupName": "policy" },
     { "name": "failOn", "type": "string", "label": "Fail on severity", "required": false, "groupName": "policy" },
     { "name": "ignoreUnfixed", "type": "boolean", "label": "Ignore unfixed", "required": false, "groupName": "policy" },
-    { "name": "ignoreFile", "type": "filePath", "label": "Ignore file", "required": false, "groupName": "policy" },
+    {
+      "name": "ignoreFile",
+      "type": "string",
+      "label": "Ignore file",
+      "required": false,
+      "groupName": "policy",
+      "helpMarkDown": "Path to a .trivyignore file, relative to the sources directory (not an absolute path). Example: `.trivyignore` or `config/.trivyignore`."
+    },
     { "name": "formats", "type": "string", "label": "Output formats", "required": false, "groupName": "output" },
     {
       "name": "generateSbom",
@@ -65,7 +72,14 @@
     { "name": "skipDbUpdate", "type": "boolean", "label": "Skip database update", "required": false, "groupName": "advanced" },
     { "name": "timeoutMinutes", "type": "string", "label": "Timeout in minutes", "required": false, "groupName": "advanced" },
     { "name": "extraTrivyArgs", "type": "string", "label": "Extra trivy arguments", "required": false, "groupName": "advanced" },
-    { "name": "workingDirectory", "type": "filePath", "label": "Working directory", "required": false, "groupName": "advanced" }
+    {
+      "name": "workingDirectory",
+      "type": "string",
+      "label": "Working directory",
+      "required": false,
+      "groupName": "advanced",
+      "helpMarkDown": "Directory to scan from, relative to the sources directory (not an absolute path). Example: `services/api`."
+    }
   ],
   "execution": {
     "Node16": { "target": "index.js" },

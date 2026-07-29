@@ -4,7 +4,7 @@
   "publisher": "iksoftware",
   "version": "0.1.0",
   "name": "Trivy Docker Scanner",
-  "description": "Run Trivy from a curated catalog of docker runner images, with centrally managed defaults and a build results tab.",
+  "description": "Run Trivy from a curated catalog of docker runner images and gate builds on the findings. Centrally managed defaults are configured via the Extension Data REST API in this version.",
   "public": false,
   "content": { "details": { "path": "overview.md" } },
   "categories": ["Azure Pipelines"],

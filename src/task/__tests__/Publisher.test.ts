@@ -68,6 +68,16 @@ describe('Publisher', () => {
     expect(lines[20]).toContain('10 more blocking findings not listed here');
   });
 
+  it('points the over-cap message at the attached report and the published artifact, not a build results tab that does not exist yet', () => {
+    const many = Array.from({ length: 21 }, (_, index) => ({
+      ...report.findings[0],
+      id: `CVE-${index}`,
+    }));
+    publisher.logBlockingFindings(many);
+    expect(lines[20]).toContain('see the attached report or the published artifact');
+    expect(lines[20]).not.toContain('Trivy tab');
+  });
+
   it('prints a summary table of severity counts', () => {
     publisher.printSummary(report, 'baseline');
     expect(lines.join('\n')).toContain('CRITICAL: 1');

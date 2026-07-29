@@ -59,8 +59,9 @@ export class Publisher {
   }
 
   /**
-   * Registers the JSON report as a build attachment. The results tab reads attachments
-   * through the Build REST API, so the attachment name must be unique per scan —
+   * Registers the JSON report as a build attachment, readable through the Build REST API
+   * (`.../attachments/trivy.report`) by anything that cares to fetch it — there is no
+   * results tab consuming it yet. The attachment name must be unique per scan, since
    * several TrivyScan steps can run in one job.
    */
   attachReport(hostPath: string, scanIndex: number): void {
@@ -111,7 +112,7 @@ export class Publisher {
     const hidden = findings.length - MAX_LOGGED_FINDINGS;
     if (hidden > 0) {
       this.write(
-        `##vso[task.logissue type=error]${pluralize(hidden, 'more blocking finding')} not listed here, see the Trivy tab.`,
+        `##vso[task.logissue type=error]${pluralize(hidden, 'more blocking finding')} not listed here, see the attached report or the published artifact.`,
       );
     }
   }
