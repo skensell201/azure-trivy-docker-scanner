@@ -242,7 +242,8 @@ git commit -m "docs: spike result for reading extension data from build agent"
 
 ```ts
 export type Severity = 'UNKNOWN' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type FailOn = Severity | 'none';
+/** UNKNOWN is a valid finding severity but a meaningless threshold: it would block everything. */
+export type FailOn = Exclude<Severity, 'UNKNOWN'> | 'none';
 export type ScanType = 'image' | 'filesystem' | 'repository' | 'config' | 'sbom';
 export type Scanner = 'vuln' | 'secret' | 'misconfig' | 'license';
 export type OutputFormat = 'table' | 'json' | 'sarif';
@@ -2163,6 +2164,15 @@ Expected: PASS, 7 тестов.
 git add src/task/GateEvaluator.ts src/task/__tests__/GateEvaluator.test.ts
 git commit -m "feat: evaluate build gate from normalized report"
 ```
+
+- [ ] **Step 6: Порядок, структура и словарь порога (по итогам ревью)**
+
+- `blocking` возвращается отсортированным по убыванию severity. В порядке отчёта при 40 MEDIUM и 3 CRITICAL публикатор, режущий список на 20, выпишет двадцать MEDIUM, а все CRITICAL уедут в строчку «и ещё N»; вкладка отрендерит тот же список с тем же эффектом.
+- Сообщение о падении добавляет общее число находок: `2 CRITICAL at or above the failOn threshold CRITICAL (502 findings total)`. Иначе ветка падения считает только блокирующие, ветка предупреждения — все, и читатель не знает, какой знаменатель перед ним.
+- `GateResult` отдаёт не только готовую английскую строку, но и разобранные части: `threshold`, `blockingCounts: SeverityCounts`, `blockingKindCounts: KindCounts`. Строку `reason` нужно показать и в текстовой сводке сборки, и в HTML-шапке вкладки, а перестроить её они не могут, не разбирая английский текст. Счётчики по видам важны отдельно: на CRITICAL-секрет и CRITICAL-CVE реакция совершенно разная — ротировать учётку против обновить пакет.
+- `failOn: 'UNKNOWN'` убирается на уровне типа (`Exclude<Severity, 'UNKNOWN'>`): `isAtLeast(x, 'UNKNOWN')` истинно для любой severity, то есть это самый строгий порог из возможных, тогда как в выпадающем списке администратор прочитает его как «падать только на неоценённых находках» — ровно наоборот. Отдельным док-комментарием фиксируется и обратное решение: находка с `UNKNOWN` не блокирует гейт `CRITICAL`, хотя «trivy не смог оценить» не то же самое, что «не важно».
+
+Тесты, которых не хватало: `blocking` пуст при `failOn: 'none'` (без этого отключённый гейт напишет двадцать красных issue в сборку), множественное число в ветке предупреждения, и хоть какое-то покрытие `UNKNOWN`.
 
 ---
 

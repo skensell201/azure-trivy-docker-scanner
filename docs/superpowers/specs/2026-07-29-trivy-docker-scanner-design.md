@@ -95,7 +95,7 @@ Scopes манифеста: `vso.build_execute`, `vso.extension_data`.
 | `skipDbUpdate` | нет | Дефолт `false` |
 | `severities` | нет | Дефолт `CRITICAL,HIGH` |
 | `scanners` | нет | Любые из `vuln,secret,misconfig,license`. Дефолт `vuln,secret` |
-| `failOn` | нет | Дефолт `CRITICAL`; значение `none` — сканировать без гейта |
+| `failOn` | нет | `LOW`…`CRITICAL`, дефолт `CRITICAL`; значение `none` — сканировать без гейта. `UNKNOWN` порогом быть не может: он ниже всех и заблокировал бы всё, хотя читается как «только неоценённые» |
 | `ignoreUnfixed` | нет | Дефолт `false` |
 | `timeoutMinutes` | нет | Дефолт `10` |
 | `allowOverrides` | нет | Поля, доступные для переопределения из пайплайна: `runner`, `severities`, `scanners`, `failOn`, `ignoreUnfixed`, `timeoutMinutes`, `skipDbUpdate`, `useDockerSocket`, `extraTrivyArgs`, `ignoreFile`. Отсутствие поля означает «можно всё», пустой массив — «нельзя ничего» |
