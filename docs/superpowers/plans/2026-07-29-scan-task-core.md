@@ -53,7 +53,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "jest",
-    "lint": "eslint src test --ext .ts",
+    "lint": "eslint src test --ext .ts --no-error-on-unmatched-pattern",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
