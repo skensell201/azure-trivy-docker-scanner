@@ -9,6 +9,14 @@ const finding = (severity: Severity, id: string): Finding => ({
   target: 'app:1.4.2',
 });
 
+const findingOfKind = (kind: Finding['kind'], severity: Severity, id: string): Finding => ({
+  kind,
+  severity,
+  id,
+  title: `${id} title`,
+  target: 'app:1.4.2',
+});
+
 const report = (findings: Finding[]): NormalizedReport => {
   const counts = { UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 };
   findings.forEach((item) => (counts[item.severity] += 1));
@@ -67,5 +75,44 @@ describe('evaluateGate', () => {
   it('explains a warning with the total number of findings', () => {
     const result = evaluateGate(report([finding('LOW', 'CVE-1')]), 'CRITICAL');
     expect(result.reason).toBe('1 finding below the failOn threshold CRITICAL');
+  });
+
+  // Self-review: NormalizedReport.findings mixes all four kinds behind one `severity`
+  // field, and the filter below reads only that field, so a secret or a misconfiguration
+  // blocks the gate exactly as a vulnerability of the same severity would.
+  it('gates secrets and misconfigurations by severity exactly like vulnerabilities', () => {
+    const result = evaluateGate(
+      report([
+        findingOfKind('secret', 'CRITICAL', 'SECRET-1'),
+        findingOfKind('misconfiguration', 'HIGH', 'MISCONFIG-1'),
+        findingOfKind('vulnerability', 'LOW', 'CVE-1'),
+      ]),
+      'HIGH',
+    );
+    expect(result.outcome).toBe('failed');
+    expect(result.blocking.map((item) => item.id)).toEqual(['SECRET-1', 'MISCONFIG-1']);
+  });
+
+  it('produces a singular-safe reason for exactly one blocking finding', () => {
+    const result = evaluateGate(report([finding('CRITICAL', 'CVE-1')]), 'CRITICAL');
+    expect(result.reason).toBe('1 CRITICAL at or above the failOn threshold CRITICAL');
+  });
+
+  it('gives an exact reason when there are no findings at all', () => {
+    const result = evaluateGate(report([]), 'CRITICAL');
+    expect(result.reason).toBe('No findings');
+  });
+
+  it('reports the exact count when the gate is disabled with findings present', () => {
+    const result = evaluateGate(report([finding('CRITICAL', 'CVE-1')]), 'none');
+    expect(result.reason).toBe('1 finding(s) reported, the gate is disabled (failOn: none)');
+  });
+
+  it('omits a severity from the breakdown when it has zero findings, even inside the blocking band', () => {
+    const result = evaluateGate(
+      report([finding('CRITICAL', 'CVE-1'), finding('CRITICAL', 'CVE-2'), finding('MEDIUM', 'CVE-3')]),
+      'MEDIUM',
+    );
+    expect(result.reason).toBe('2 CRITICAL, 1 MEDIUM at or above the failOn threshold MEDIUM');
   });
 });
