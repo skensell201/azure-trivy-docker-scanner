@@ -4301,7 +4301,11 @@ execSync('npm install --omit=dev --no-package-lock', { cwd: out, stdio: 'inherit
 console.log(`Task assembled in ${out}`);
 ```
 
-Компилятор кладёт `src/task/*` в `build/task/*`, а `src/shared/*` в `build/shared/*`; относительные импорты `../shared/...` из `build/task` указывают на `build/shared`, поэтому копирование `shared` рядом с `index.js` сохраняет ту же относительную структуру только при переносе на уровень выше. Чтобы не полагаться на догадки, следующий шаг это проверяет запуском.
+Компилятор кладёт `src/task/*` в `build/task/*`, а `src/shared/*` в `build/shared/*`, и скомпилированный таск требует `../shared/...`. Плоская раскладка (содержимое `build/task` прямо в `TrivyScan/`, а `shared` — в `TrivyScan/shared`) эту связь ломает: из `TrivyScan/inputs.js` путь `../shared/...` уходит **выше** каталога пакета. Проверено запуском — получается `Error: Cannot find module '../shared/severity'`.
+
+Поэтому раскладка внутри пакета повторяет структуру `build/`: код таска в `TrivyScan/task/`, общий код в `TrivyScan/shared/`. При этом сам `task.json` обязан лежать в корне `TrivyScan/`, где его ищут tfx и агент, поэтому скрипт читает `src/task/task.json`, переписывает в памяти `execution.*.target` с `index.js` на `task/index.js` и кладёт в пакет уже исправленную копию. Исходный `src/task/task.json` не трогается.
+
+Ошибка такого рода не видна до установки: `.vsix` собирается, ставится, и падает на агенте заказчика. Поэтому следующий шаг проверяет сборку запуском, а CI повторяет ту же проверку на каждом pull request, а не только на теге.
 
 - [ ] **Step 3: Добавить скрипты в `package.json`**
 
