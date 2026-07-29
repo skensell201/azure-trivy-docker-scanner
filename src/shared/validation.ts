@@ -78,11 +78,16 @@ export function validateRunner(runner: unknown): ValidationIssue[] {
     }
   }
 
-  if (runner.extraDockerArgs) {
-    try {
-      splitArgs(runner.extraDockerArgs as string);
-    } catch (error) {
-      issues.push({ field: 'extraDockerArgs', message: (error as Error).message });
+  const extraDockerArgs = runner.extraDockerArgs;
+  if (extraDockerArgs !== undefined) {
+    if (typeof extraDockerArgs !== 'string') {
+      issues.push({ field: 'extraDockerArgs', message: 'extraDockerArgs must be a string.' });
+    } else {
+      try {
+        splitArgs(extraDockerArgs);
+      } catch (error) {
+        issues.push({ field: 'extraDockerArgs', message: (error as Error).message });
+      }
     }
   }
 

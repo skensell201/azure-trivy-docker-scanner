@@ -46,6 +46,13 @@ describe('validateRunner', () => {
     ]);
   });
 
+  it('rejects a non-string extraDockerArgs instead of crashing on iteration', () => {
+    const issues = validateRunner(runner({ extraDockerArgs: 5 as unknown as string }));
+    expect(issues).toEqual([
+      { field: 'extraDockerArgs', message: expect.stringContaining('string') },
+    ]);
+  });
+
   it('reports every failing field at once instead of stopping at the first', () => {
     const issues = validateRunner(runner({ alias: 'Bad Alias', image: '' }));
     expect(issues).toEqual([
@@ -163,6 +170,12 @@ describe('validateCatalog', () => {
   it('rejects a non-object catalog entry, naming its index, instead of dereferencing it', () => {
     const issues = validateCatalog([null, runner()]);
     expect(issues).toEqual([{ field: 'runners[0]', message: expect.stringContaining('index 0') }]);
+  });
+
+  it('reports a sensible issue instead of a confusing one when a caller passes a single runner instead of an array', () => {
+    expect(validateCatalog(runner())).toEqual([
+      { field: 'runners', message: expect.stringContaining('list of runners') },
+    ]);
   });
 
   // --- Fix 3: mutation-tested gap ---
