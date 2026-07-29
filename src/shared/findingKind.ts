@@ -1,11 +1,11 @@
 import { FindingKind, KindCounts } from './types';
 
-export const FINDING_KINDS: readonly FindingKind[] = [
+export const FINDING_KINDS = [
   'vulnerability',
   'secret',
   'misconfiguration',
   'license',
-];
+] as const satisfies readonly FindingKind[];
 
 export function emptyKindCounts(): KindCounts {
   return {

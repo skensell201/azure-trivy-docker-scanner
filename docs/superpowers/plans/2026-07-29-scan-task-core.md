@@ -53,7 +53,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "jest",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src test --ext .ts",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -84,8 +84,6 @@
     "target": "ES2021",
     "module": "commonjs",
     "lib": ["ES2021"],
-    "outDir": "build",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -96,6 +94,8 @@
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
 ```
+
+`rootDir` и `outDir` здесь не объявляются намеренно: в конфиге с `--noEmit` они бессмысленны, а вместе с `include` на `test/**` дают `TS6059: File is not under rootDir` на первом же файле в `test/`.
 
 `tsconfig.build.json` используется только для компиляции и выкидывает тесты из выпуска:
 
@@ -415,12 +415,29 @@ Expected: FAIL — `Cannot find module '../severity'`.
 - [ ] **Step 4: Реализовать `src/shared/severity.ts`**
 
 ```ts
-import { Severity } from './types';
+import { Severity, SeverityCounts } from './types';
 
-export const SEVERITY_ORDER: Severity[] = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+export const SEVERITY_ORDER = [
+  'UNKNOWN',
+  'LOW',
+  'MEDIUM',
+  'HIGH',
+  'CRITICAL',
+] as const satisfies readonly Severity[];
+
+/** Throws on a value outside the vocabulary: a silent -1 would sort below UNKNOWN and block everything. */
+export function severityRank(value: Severity): number {
+  const rank = (SEVERITY_ORDER as readonly string[]).indexOf(value);
+  if (rank === -1) {
+    throw new Error(
+      `Unknown severity "${value}". Allowed values: ${SEVERITY_ORDER.join(', ')}.`,
+    );
+  }
+  return rank;
+}
 
 export function compareSeverity(a: Severity, b: Severity): number {
-  return SEVERITY_ORDER.indexOf(a) - SEVERITY_ORDER.indexOf(b);
+  return severityRank(a) - severityRank(b);
 }
 
 export function isAtLeast(value: Severity, threshold: Severity): boolean {
@@ -428,25 +445,34 @@ export function isAtLeast(value: Severity, threshold: Severity): boolean {
 }
 
 export function isSeverity(value: string): value is Severity {
-  return (SEVERITY_ORDER as string[]).includes(value);
+  return (SEVERITY_ORDER as readonly string[]).includes(value);
+}
+
+export function parseSeverity(raw: string): Severity {
+  const value = raw.trim().toUpperCase();
+  if (value.length === 0) {
+    throw new Error(`Expected a severity, got an empty value.`);
+  }
+  if (!isSeverity(value)) {
+    throw new Error(`Unknown severity "${value}". Allowed values: ${SEVERITY_ORDER.join(', ')}.`);
+  }
+  return value;
 }
 
 export function parseSeverityList(raw: string): Severity[] {
-  return raw
+  const parts = raw
     .split(',')
-    .map((part) => part.trim().toUpperCase())
-    .filter((part) => part.length > 0)
-    .map((part) => {
-      if (!isSeverity(part)) {
-        throw new Error(
-          `Unknown severity "${part}". Allowed values: ${SEVERITY_ORDER.join(', ')}.`,
-        );
-      }
-      return part;
-    });
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (parts.length === 0) {
+    throw new Error(`Expected a comma separated list of severities, got "${raw}".`);
+  }
+
+  return parts.map(parseSeverity);
 }
 
-export function emptySeverityCounts(): Record<Severity, number> {
+export function emptySeverityCounts(): SeverityCounts {
   return { UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 };
 }
 ```
@@ -2797,7 +2823,7 @@ Expected: FAIL — `Cannot find module '../Publisher'`.
 - [ ] **Step 3: Реализовать `src/task/Publisher.ts`**
 
 ```ts
-import { SEVERITY_ORDER } from '../shared/severity';
+import { compareSeverity, SEVERITY_ORDER } from '../shared/severity';
 import { Finding, NormalizedReport } from '../shared/types';
 
 const MAX_LOGGED_FINDINGS = 20;
@@ -3409,9 +3435,7 @@ function buildArgs(
       return;
     }
 
-    const rows = [...report.findings].sort(
-      (a, b) => SEVERITY_ORDER.indexOf(b.severity) - SEVERITY_ORDER.indexOf(a.severity),
-    );
+    const rows = [...report.findings].sort((a, b) => compareSeverity(b.severity, a.severity));
 
     this.write('SEVERITY  ID                   PACKAGE                   FIXED IN');
     for (const finding of rows) {

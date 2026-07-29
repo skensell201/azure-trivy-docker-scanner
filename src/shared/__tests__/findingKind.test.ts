@@ -1,6 +1,15 @@
-import { emptyKindCounts } from '../findingKind';
+import { emptyKindCounts, FINDING_KINDS } from '../findingKind';
 
 describe('findingKind', () => {
+  it('lists every kind in the documented order', () => {
+    expect(FINDING_KINDS).toEqual([
+      'vulnerability',
+      'secret',
+      'misconfiguration',
+      'license',
+    ]);
+  });
+
   it('returns every kind zeroed', () => {
     expect(emptyKindCounts()).toEqual({
       vulnerability: 0,

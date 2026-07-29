@@ -1,6 +1,12 @@
 import { Severity, SeverityCounts } from './types';
 
-export const SEVERITY_ORDER: readonly Severity[] = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+export const SEVERITY_ORDER = [
+  'UNKNOWN',
+  'LOW',
+  'MEDIUM',
+  'HIGH',
+  'CRITICAL',
+] as const satisfies readonly Severity[];
 
 export function isSeverity(value: string): value is Severity {
   return (SEVERITY_ORDER as readonly string[]).includes(value);
