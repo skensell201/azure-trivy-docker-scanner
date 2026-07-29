@@ -94,4 +94,76 @@ describe('ConfigClient', () => {
 
     await expect(client.readDocument('runners')).rejects.toThrow(/ECONNREFUSED/);
   });
+
+  // Pinning tests below lock down behavior that already holds today, so a
+  // future change cannot silently regress it or the hazard it documents.
+
+  it('never puts the auth token in a transport-failure error message', async () => {
+    const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'pat', token: 'super-secret-pat' },
+      fetch: fetchMock,
+    });
+
+    await expect(client.readDocument('runners')).rejects.not.toThrow(/super-secret-pat/);
+  });
+
+  it('never puts the auth token in an HTTP-failure error message', async () => {
+    const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 403, text: async () => 'no' });
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'super-secret-token' },
+      fetch: fetchMock,
+    });
+
+    await expect(client.readDocument('runners')).rejects.not.toThrow(/super-secret-token/);
+  });
+
+  it('interpolates the document id into the URL without encoding it', async () => {
+    // Both current callers pass fixed literals ('runners', 'defaults'), so this
+    // is not exploitable today, but the method takes a bare string: a future
+    // caller passing an untrusted id could inject path segments or query
+    // parameters. This test pins the current passthrough so that hazard is
+    // visible rather than silent.
+    const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
+    const client = new ConfigClient({
+      collectionUri: 'https://ado.corp/DefaultCollection',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    await client.readDocument('../other?x=1');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain('/Documents/../other?x=1?api-version=');
+  });
+
+  it('builds a hostless URL when collectionUri is empty, rather than rejecting it up front', async () => {
+    // There is no validation of collectionUri: an empty (or schemeless) value
+    // silently produces a URL with no host. A real fetch implementation would
+    // reject such a URL, but the resulting ConfigUnavailableError would only
+    // report a generic connection failure, not "collectionUri is not set".
+    const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
+    const client = new ConfigClient({
+      collectionUri: '',
+      publisher: 'iksoftware',
+      extensionId: 'trivy-docker-scanner',
+      auth: { mode: 'bearer', token: 'tok' },
+      fetch: fetchMock,
+    });
+
+    await client.readDocument('runners');
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      '/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1',
+    );
+  });
 });
