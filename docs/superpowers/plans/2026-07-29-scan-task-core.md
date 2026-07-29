@@ -547,8 +547,18 @@ describe('splitArgs', () => {
   it('rejects an unterminated quote instead of silently swallowing the rest', () => {
     expect(() => splitArgs('--label "scan run')).toThrow(/Unterminated quote/);
   });
+
+  it('preserves an explicitly empty argument', () => {
+    expect(splitArgs('--label ""')).toEqual(['--label', '']);
+  });
+
+  it('joins a quoted segment to adjacent unquoted text', () => {
+    expect(splitArgs('--label description="my scan"')).toEqual(['--label', 'description=my scan']);
+  });
 });
 ```
+
+Последние два теста не декоративные: без них два правдоподобных «упрощения» реализации проходят весь набор. Замена `hasContent` на проверку `current` на истинность теряет пустой аргумент, а он в argv значим — массив уходит в `spawn` без шелла, и потеря элемента сдвигает все последующие позиционные аргументы, из-за чего trivy читает как цель скана не то значение. Разрыв токена на кавычке ломает обычную докеровскую запись `--label key="value"`.
 
 - [ ] **Step 2: Убедиться, что тест падает**
 
@@ -566,9 +576,14 @@ export function splitArgs(raw: string | undefined): string[] {
   const result: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
+  let quoteStart = -1;
+  // True once a token has been opened, including an empty quoted one: `current` truthiness is not a substitute.
   let hasContent = false;
+  let position = 0;
 
   for (const char of raw) {
+    position += 1;
+
     if (quote) {
       if (char === quote) {
         quote = null;
@@ -580,10 +595,12 @@ export function splitArgs(raw: string | undefined): string[] {
 
     if (char === '"' || char === "'") {
       quote = char;
+      quoteStart = position;
       hasContent = true;
       continue;
     }
 
+    // Unicode whitespace separates arguments deliberately, so a pasted NBSP does not become part of a token.
     if (/\s/.test(char)) {
       if (hasContent) {
         result.push(current);
@@ -598,7 +615,8 @@ export function splitArgs(raw: string | undefined): string[] {
   }
 
   if (quote) {
-    throw new Error(`Unterminated quote in arguments: ${raw}`);
+    // Report the position, not the string: extraTrivyArgs comes from the pipeline and lands in the build log.
+    throw new Error(`Unterminated quote in arguments at position ${quoteStart}.`);
   }
   if (hasContent) {
     result.push(current);
