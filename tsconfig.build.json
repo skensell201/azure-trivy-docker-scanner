@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "rootDir": "src",
+    // The base config sets noEmit so a bare `tsc -p tsconfig.json` cannot litter .js next to sources.
+    // This is the one config that is supposed to produce output.
+    "noEmit": false
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["src/**/__tests__/**", "test/**"]
+}

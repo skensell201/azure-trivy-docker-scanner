@@ -51,9 +51,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "test": "jest",
-    "lint": "eslint src --ext .ts",
+    "lint": "eslint src test --ext .ts --no-error-on-unmatched-pattern",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
@@ -74,7 +74,9 @@
 }
 ```
 
-- [ ] **Step 2: Создать `tsconfig.json`**
+- [ ] **Step 2: Создать `tsconfig.json` и `tsconfig.build.json`**
+
+`tsconfig.json` покрывает всё, включая тесты, — иначе `npm run typecheck` молча пропускает тестовый код:
 
 ```json
 {
@@ -82,8 +84,6 @@
     "target": "ES2021",
     "module": "commonjs",
     "lib": ["ES2021"],
-    "outDir": "build",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -91,8 +91,23 @@
     "declaration": false,
     "sourceMap": true
   },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
+```
+
+`rootDir` и `outDir` здесь не объявляются намеренно: в конфиге с `--noEmit` они бессмысленны, а вместе с `include` на `test/**` дают `TS6059: File is not under rootDir` на первом же файле в `test/`.
+
+`tsconfig.build.json` используется только для компиляции и выкидывает тесты из выпуска:
+
+```json
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "build",
+    "rootDir": "src"
+  },
   "include": ["src/**/*.ts"],
-  "exclude": ["src/**/__tests__/**"]
+  "exclude": ["src/**/__tests__/**", "test/**"]
 }
 ```
 
@@ -134,11 +149,12 @@ module.exports = {
 ```bash
 npm install
 mkdir -p src/shared src/task test/fixtures && touch src/shared/.gitkeep src/task/.gitkeep test/fixtures/.gitkeep
-npm run typecheck
 npx jest --passWithNoTests
 ```
 
-Expected: `typecheck` завершается без вывода ошибок, jest печатает `No tests found, exiting with code 0`.
+Expected: jest печатает `No tests found, exiting with code 0`.
+
+`npm run typecheck` на этом шаге запускать бесполезно: пока под `src/` нет ни одного `.ts`, `tsc` жёстко падает с `TS18003: No inputs were found in config file`. Это не ошибка конфигурации и подавить её флагом нельзя — проверка типов становится осмысленной начиная с Task 3, где появляются первые исходники.
 
 - [ ] **Step 6: Commit**
 
@@ -226,7 +242,8 @@ git commit -m "docs: spike result for reading extension data from build agent"
 
 ```ts
 export type Severity = 'UNKNOWN' | 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
-export type FailOn = Severity | 'none';
+/** UNKNOWN is a valid finding severity but a meaningless threshold: it would block everything. */
+export type FailOn = Exclude<Severity, 'UNKNOWN'> | 'none';
 export type ScanType = 'image' | 'filesystem' | 'repository' | 'config' | 'sbom';
 export type Scanner = 'vuln' | 'secret' | 'misconfig' | 'license';
 export type OutputFormat = 'table' | 'json' | 'sarif';
@@ -240,7 +257,10 @@ export type OverridableField =
   | 'failOn'
   | 'ignoreUnfixed'
   | 'timeoutMinutes'
-  | 'skipDbUpdate';
+  | 'skipDbUpdate'
+  | 'useDockerSocket'
+  | 'extraTrivyArgs'
+  | 'ignoreFile';
 
 export interface RunnerConfig {
   alias: string;
@@ -399,12 +419,29 @@ Expected: FAIL — `Cannot find module '../severity'`.
 - [ ] **Step 4: Реализовать `src/shared/severity.ts`**
 
 ```ts
-import { Severity } from './types';
+import { Severity, SeverityCounts } from './types';
 
-export const SEVERITY_ORDER: Severity[] = ['UNKNOWN', 'LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+export const SEVERITY_ORDER = [
+  'UNKNOWN',
+  'LOW',
+  'MEDIUM',
+  'HIGH',
+  'CRITICAL',
+] as const satisfies readonly Severity[];
+
+/** Throws on a value outside the vocabulary: a silent -1 would sort below UNKNOWN and block everything. */
+export function severityRank(value: Severity): number {
+  const rank = (SEVERITY_ORDER as readonly string[]).indexOf(value);
+  if (rank === -1) {
+    throw new Error(
+      `Unknown severity "${value}". Allowed values: ${SEVERITY_ORDER.join(', ')}.`,
+    );
+  }
+  return rank;
+}
 
 export function compareSeverity(a: Severity, b: Severity): number {
-  return SEVERITY_ORDER.indexOf(a) - SEVERITY_ORDER.indexOf(b);
+  return severityRank(a) - severityRank(b);
 }
 
 export function isAtLeast(value: Severity, threshold: Severity): boolean {
@@ -412,25 +449,34 @@ export function isAtLeast(value: Severity, threshold: Severity): boolean {
 }
 
 export function isSeverity(value: string): value is Severity {
-  return (SEVERITY_ORDER as string[]).includes(value);
+  return (SEVERITY_ORDER as readonly string[]).includes(value);
+}
+
+export function parseSeverity(raw: string): Severity {
+  const value = raw.trim().toUpperCase();
+  if (value.length === 0) {
+    throw new Error(`Expected a severity, got an empty value.`);
+  }
+  if (!isSeverity(value)) {
+    throw new Error(`Unknown severity "${value}". Allowed values: ${SEVERITY_ORDER.join(', ')}.`);
+  }
+  return value;
 }
 
 export function parseSeverityList(raw: string): Severity[] {
-  return raw
+  const parts = raw
     .split(',')
-    .map((part) => part.trim().toUpperCase())
-    .filter((part) => part.length > 0)
-    .map((part) => {
-      if (!isSeverity(part)) {
-        throw new Error(
-          `Unknown severity "${part}". Allowed values: ${SEVERITY_ORDER.join(', ')}.`,
-        );
-      }
-      return part;
-    });
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+
+  if (parts.length === 0) {
+    throw new Error(`Expected a comma separated list of severities, got "${raw}".`);
+  }
+
+  return parts.map(parseSeverity);
 }
 
-export function emptySeverityCounts(): Record<Severity, number> {
+export function emptySeverityCounts(): SeverityCounts {
   return { UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 };
 }
 ```
@@ -446,6 +492,23 @@ Expected: PASS, 5 тестов.
 git add src/shared/types.ts src/shared/severity.ts src/shared/__tests__/severity.test.ts
 git commit -m "feat: shared config types and severity helpers"
 ```
+
+- [ ] **Step 7: Ужесточить словарь severity (по итогам ревью)**
+
+`indexOf` возвращает `-1` для значения вне союза, из-за чего `failOn: "critical"` в нижнем регистре сортируется ниже `UNKNOWN` и делает блокирующей любую находку. Ни `validation.ts`, ни `ConfigClient` значение `failOn` не проверяют, так что попасть туда мусор может. Поэтому:
+
+- `SEVERITY_ORDER` объявляется как `readonly Severity[]` (в `isSeverity` внутренний каст становится `as readonly string[]`);
+- добавляется `severityRank(value: Severity): number`, который бросает исключение на неизвестном значении; через него идут `compareSeverity` и `isAtLeast`;
+- добавляется `parseSeverity(raw: string): Severity` — тримит, приводит к верхнему регистру, бросает на пустой строке и на неизвестном значении;
+- `parseSeverityList` разбирает элементы через `parseSeverity` и бросает, если не получилось ни одного значения (иначе `--severity ''` уходит в trivy).
+
+Тесты: бросок `severityRank` на неизвестном значении, бросок `isAtLeast` на неизвестном пороге, `parseSeverity` на ' high ' и на пустой строке, отказ `parseSeverityList` на `''` и `' ,, '`, регистрозависимость `isSeverity`, и вместо повтора литерала — проверка, что `emptySeverityCounts()` возвращает свежий объект (его мутирует `ReportParser`).
+
+- [ ] **Step 8: Именованные типы счётчиков и `findingKind.ts`**
+
+В `types.ts` добавляются `export type SeverityCounts = Record<Severity, number>` и `export type KindCounts = Record<FindingKind, number>`, которые используются в `NormalizedReport`. Рядом создаётся `src/shared/findingKind.ts` с `FINDING_KINDS: readonly FindingKind[]` и `emptyKindCounts(): KindCounts` плюс тест на нулевые значения и свежесть объекта — иначе этот литерал дублируется в `ReportParser` и во вкладке результатов.
+
+Док-комментарии в `types.ts` пишутся по-английски (файл читают оба UI-плана) и покрывают только неочевидное: `enabled` (отсутствие означает «включён»), `allowOverrides` (отсутствие — можно переопределять всё, пустой массив — ничего), `schemaVersion`, `artifactName` против `target`, `scanIndex`, неуникальность `Finding.id`, нестабильный формат `Finding.location`.
 
 ---
 
@@ -488,8 +551,18 @@ describe('splitArgs', () => {
   it('rejects an unterminated quote instead of silently swallowing the rest', () => {
     expect(() => splitArgs('--label "scan run')).toThrow(/Unterminated quote/);
   });
+
+  it('preserves an explicitly empty argument', () => {
+    expect(splitArgs('--label ""')).toEqual(['--label', '']);
+  });
+
+  it('joins a quoted segment to adjacent unquoted text', () => {
+    expect(splitArgs('--label description="my scan"')).toEqual(['--label', 'description=my scan']);
+  });
 });
 ```
+
+Последние два теста не декоративные: без них два правдоподобных «упрощения» реализации проходят весь набор. Замена `hasContent` на проверку `current` на истинность теряет пустой аргумент, а он в argv значим — массив уходит в `spawn` без шелла, и потеря элемента сдвигает все последующие позиционные аргументы, из-за чего trivy читает как цель скана не то значение. Разрыв токена на кавычке ломает обычную докеровскую запись `--label key="value"`.
 
 - [ ] **Step 2: Убедиться, что тест падает**
 
@@ -507,9 +580,14 @@ export function splitArgs(raw: string | undefined): string[] {
   const result: string[] = [];
   let current = '';
   let quote: '"' | "'" | null = null;
+  let quoteStart = -1;
+  // True once a token has been opened, including an empty quoted one: `current` truthiness is not a substitute.
   let hasContent = false;
+  let position = 0;
 
   for (const char of raw) {
+    position += 1;
+
     if (quote) {
       if (char === quote) {
         quote = null;
@@ -521,10 +599,12 @@ export function splitArgs(raw: string | undefined): string[] {
 
     if (char === '"' || char === "'") {
       quote = char;
+      quoteStart = position;
       hasContent = true;
       continue;
     }
 
+    // Unicode whitespace separates arguments deliberately, so a pasted NBSP does not become part of a token.
     if (/\s/.test(char)) {
       if (hasContent) {
         result.push(current);
@@ -539,7 +619,8 @@ export function splitArgs(raw: string | undefined): string[] {
   }
 
   if (quote) {
-    throw new Error(`Unterminated quote in arguments: ${raw}`);
+    // Report the position, not the string: extraTrivyArgs comes from the pipeline and lands in the build log.
+    throw new Error(`Unterminated quote in arguments at position ${quoteStart}.`);
   }
   if (hasContent) {
     result.push(current);
@@ -797,6 +878,21 @@ git add src/shared/validation.ts src/shared/__tests__/validation.test.ts
 git commit -m "feat: shared validation rules for runners and defaults"
 ```
 
+- [ ] **Step 6: Ужесточить модуль против непроверенных документов (по итогам ревью)**
+
+Обещание «возвращаем список проблем, а не бросаем» выполняется только для входа, который уже соответствует типам, — то есть ровно для случая, который не нуждается в валидации. Таск же скармливает сюда результат `JSON.parse` из документа, правимого руками через REST. Сейчас `validateCatalog(null)` даёт `TypeError: runners is not iterable`, а `"severities": null` — `Cannot read properties of null`, потому что `null !== undefined` и охранное условие пропускает такое значение. В логе сборки это выглядит как внутренняя ошибка вместо «документ настроек испорчен».
+
+Поэтому:
+
+- все три функции принимают `unknown` вместо объявленных типов — это честная сигнатура для кода, чья работа и состоит в проверке недоверенной формы (со старой сигнатурой тесты на испорченный вход просто не компилировались). Возвращаемый тип и форма `ValidationIssue` не меняются;
+- каждая из трёх функций начинается с проверки формы: не массив → одна проблема на поле `runners`; не объект → проблема на поле `runner`/`defaults`; элемент каталога не объект → проблема с указанием индекса;
+- значения не того типа не проходят молча: `timeoutMinutes` проверяется через `typeof === 'number' && Number.isFinite && > 0` (иначе `NaN` уезжает в докер-команду), `severities` и `scanners` — через `Array.isArray` (иначе строка `'HIGH'` считается непустым списком), `alias`, `image`, `dbRepository` — через `typeof === 'string'`;
+- тег образа проверяется шаблоном `^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`, иначе проходят `reg.corp/trivy:` и `reg.corp/trivy:0.58.1 --privileged`. Ссылки по digest (`@sha256:...`) распознаются отдельно и принимаются намеренно: digest — самая воспроизводимая ссылка из возможных, отвергать её было бы ровно наоборот;
+- сообщения дедуплицируются (один и тот же дублирующийся alias сообщается один раз), а сообщение про раннер по умолчанию называет виновников: `found 2: "baseline", "hardened"`;
+- на `validateCatalog` вешается док-комментарий о том, что он проверяет только межраннерные инварианты: сейчас каталог из одного раннера с плохим alias и тегом `latest` получает от него чистый вердикт, и ничто не подсказывает вызывающему, что нужно ещё пройтись `validateRunner` по элементам.
+
+Тесты, которых не хватало (мутационное тестирование показало, что без них правки реализации проходят весь набор): отказ на пустом `scanners` — единственное правило `validateDefaults`, не покрытое вообще; принятие раннера с опущенным `enabled` (в `types.ts` задокументировано, что отсутствие означает «включён»); границы длины alias — 2 и 32 символа; приём `reg.corp/latest-trivy:0.58.1`, чтобы правило про `latest` смотрело на тег, а не на подстроку имени; и три формы digest-ссылок.
+
 ---
 
 ## Task 6: Слияние конфигурации и политика переопределений
@@ -971,8 +1067,8 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     }
     if (!allowed.includes(field)) {
       throw new PolicyViolationError(
-        `The pipeline sets "${field}", but the project policy does not allow overriding it. ` +
-          `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Project Settings > Trivy Scanner.`,
+        `The pipeline sets "${field}", but the collection policy does not allow overriding it. ` +
+          `Overridable fields: ${allowed.join(', ') || 'none'}. Change the value in Collection Settings > Trivy Scanner.`,
       );
     }
     return fromInputs;
@@ -1011,7 +1107,7 @@ function selectRunner(runners: RunnerConfig[], requested: string | undefined): R
 
   if (runners.length === 0) {
     throw new RunnerNotFoundError(
-      'The project has no runners configured. Add one in Project Settings > Trivy Scanner > Runners.',
+      'The collection has no runners configured. Add one in Collection Settings > Trivy Scanner > Runners.',
     );
   }
 
@@ -1030,7 +1126,7 @@ function selectRunner(runners: RunnerConfig[], requested: string | undefined): R
   const fallback = usable.find((runner) => runner.isDefault);
   if (!fallback) {
     throw new RunnerNotFoundError(
-      'No default runner is configured. Mark one runner as default in Project Settings > Trivy Scanner > Runners, or set the "runner" input.',
+      'No default runner is configured. Mark one runner as default in Collection Settings > Trivy Scanner > Runners, or set the "runner" input.',
     );
   }
   return fallback;
@@ -1048,6 +1144,22 @@ Expected: PASS, 10 тестов.
 git add src/task/ConfigResolver.ts src/task/__tests__/ConfigResolver.test.ts
 git commit -m "feat: resolve scan config from defaults, catalog and inputs"
 ```
+
+- [ ] **Step 6: Закрыть обход политики и связать `pick` с полем (по итогам ревью)**
+
+Три поля доходили до `ResolvedScanConfig` мимо `pick`, и каждое отменяет политику:
+
+- `extraTrivyArgs` дописывается после `--severity` и `--scanners`, а в cobra выигрывает последнее вхождение флага, так что `allowOverrides: []` не мешает пайплайну написать `--severity LOW --ignore-unfixed`;
+- `ignoreFile` глушит находки через `.trivyignore` и обходит `failOn`;
+- `useDockerSocket` монтирует docker-сокет — root на агенте.
+
+Поэтому `OverridableField` расширяется этими тремя полями (см. Task 3), и все три идут через `pick`. `scanType` и `target` остаются вне политики намеренно, как и `formats`, `generateSbom`, `publishArtifact`, `workingDirectory`.
+
+Заодно чинится сам `pick`: сейчас `pick('severities', inputs.failOn, ...)` компилируется, то есть ключ политики и значение можно случайно взять из разных полей — гейт встанет не на то поле и сообщение назовёт не то имя. Ключ связывается со значением через `F extends OverridableField & keyof TaskInputs`, а `ALL_OVERRIDABLE` выводится из литерала с `satisfies Record<OverridableField, ...>`, иначе список молча расходится с союзом и новое поле оказывается непереопределяемым даже при опущенном `allowOverrides`. Проверка присутствия остаётся `=== undefined`: явный `false` из пайплайна должен побеждать.
+
+Сообщения: пустой список включённых раннеров не печатается как `Enabled runners: .`; отключённый раннер по умолчанию описывается теми же словами, что в `validateCatalog`, а не советом «пометьте раннер по умолчанию»; опечатка в алиасе отличается от намеренно отключённого раннера; `PolicyViolationError` называет действующее значение; `runner: ''` считается отсутствующим. Все нарушения политики собираются и сообщаются одним исключением, иначе пайплайн чинит их по одному за сборку.
+
+Тесты: мутационное тестирование показало 14 регрессий, проходящих весь набор, — в том числе замена `useDockerSocket ?? false` на `?? true`, монтирующая docker-сокет в каждую сборку. Закрывается двумя проверками целиком собранного объекта: на минимальном входе (фиксирует все встроенные умолчания) и на полностью заполненных `defaults` и `inputs` при разрешающей политике (фиксирует все pass-through и приоритеты).
 
 ---
 
@@ -1366,6 +1478,21 @@ git add src/task/DockerCommand.ts src/task/__tests__/DockerCommand.test.ts
 git commit -m "feat: build docker run arguments and trivy environment"
 ```
 
+- [ ] **Step 6: Защитить инварианты от `extraTrivyArgs` и путей-побегов (по итогам ревью)**
+
+Порядок аргументов в этом модуле — не косметика: trivy построен на cobra, где из двух одинаковых скалярных флагов выигрывает последний, а `extraTrivyArgs` дописывается в конец. Из-за этого пайплайн мог поставить `--exit-code 1` (гейт возвращается внутрь trivy, `failOn: 'none'` перестаёт означать «никогда не падать»), `--format table` или другой `--output` (парсер получает не тот файл и падает невнятно), а также включить `--ignore-unfixed` и `--skip-db-update` — оба поля политики, то есть запертое админом обходится.
+
+Закрывается двумя дополняющими мерами:
+
+- `--format json`, `--output` и `--exit-code 0` переутверждаются **после** `extraTrivyArgs`; позиционной остаётся только цель. Что бы ни написал пайплайн, контракт парсера и гейта выигрывает;
+- зарезервированные флаги в `extraTrivyArgs` отвергаются: `--format`/`-f`, `--output`/`-o`, `--exit-code`, `--severity`/`-s`, `--scanners`, `--ignore-unfixed`, `--skip-db-update`, `--ignorefile`, `--timeout`, в написании и через пробел, и через `=`. Сообщение называет флаг и говорит, каким input он управляется.
+
+`workingDirectory` и `ignoreFile` после `path.posix.join` с `/workspace` нормализуются, и результат обязан остаться внутри `/workspace`, иначе — исключение с указанием поля. Не обрезка, а отказ: тихая обрезка спрятала бы ошибку, а её последствие — ложный негатив (скан `filesystem` с целью `.` уходит в образ-раннер и проходит гейт чистым).
+
+`cacheDir` валидируется в `validateDefaults` (Task 5): строка, абсолютный путь, не корень и не корневой каталог вроде `/etc`. Значение уезжает в `-v`, и `cacheDir: "/"` смонтировал бы корень хоста в контейнер на запись.
+
+Тесты, которых не хватало: `workingDirectory: 'subdir'` действительно даёт `-w /workspace/subdir` (удаление всей поддержки `workingDirectory` до этого проходило все 113 тестов); `--exit-code 0` и `--format json` проверяются отдельными утверждениями, а не только внутри golden-массива, иначе законная перегенерация массива молча снимает оба инварианта. Рядом с местом, где `extraDockerArgs` вставляется в argv, ставится комментарий о границе доверия: это поле недоступно из пайплайна и намеренно не ограничивается, потому что тот же администратор выбирает сам образ раннера и уже может запустить на агенте что угодно.
+
 ---
 
 ## Task 8: Временный env-файл с секретами
@@ -1457,6 +1584,16 @@ Expected: PASS, 4 теста.
 git add src/task/EnvFile.ts src/task/__tests__/EnvFile.test.ts
 git commit -m "feat: owner-only env file for trivy secrets"
 ```
+
+- [ ] **Step 6: Защитить путь записи (по итогам ревью)**
+
+Показанный выше `writeFileSync` следует за символической ссылкой: подложенный по этому пути симлинк увёл бы пароль к registry в чужой файл, который заодно получил бы права 0600. Файл открывается вручную с `O_NOFOLLOW`, права выставляются через `fchmodSync` на уже открытом дескрипторе — `chmodSync` по пути заново его разрешает, оставляя окно на подмену между закрытием и сменой прав.
+
+`O_NOFOLLOW` не спасает от **жёсткой** ссылки: предусловие то же самое (чужой процесс может создавать имена во временном каталоге агента), поэтому путь либо предварительно удаляется и открывается с `O_EXCL`, либо проверяется через `fstatSync` на `nlink !== 1`. Права сужаются **до** записи: на уже существующем файле с правами 0644 `O_TRUNC` их не меняет, и запись прошла бы в 0644.
+
+`removeEnvFile` не имеет права бросать исключение: он вызывается в `finally`, и `force: true` глушит только `ENOENT` — на `EACCES` или блокировке антивирусом реальная причина падения скана подменилась бы ошибкой удаления, а файл с паролем остался бы на диске.
+
+Проверка `mode` при создании ничего не гарантирует сама по себе: umask её только сужает, но на существующем файле она вовсе игнорируется. Единственная гарантия — `fchmod`, и в наборе тестов должен быть тест, который отличает `fchmod(fd)` от `chmod(path)`, иначе вся эта защита для набора невидима.
 
 ---
 
@@ -1709,15 +1846,9 @@ Expected: FAIL — `Cannot find module '../ReportParser'`.
 - [ ] **Step 7: Реализовать `src/task/ReportParser.ts`**
 
 ```ts
+import { emptyKindCounts } from '../shared/findingKind';
 import { emptySeverityCounts, isSeverity } from '../shared/severity';
-import {
-  Finding,
-  FindingKind,
-  NormalizedReport,
-  RunnerInfo,
-  ScanType,
-  Severity,
-} from '../shared/types';
+import { Finding, NormalizedReport, RunnerInfo, ScanType, Severity } from '../shared/types';
 
 export class TrivyReportParseError extends Error {}
 
@@ -1843,12 +1974,7 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): NormalizedRepor
   }
 
   const counts = emptySeverityCounts();
-  const kindCounts: Record<FindingKind, number> = {
-    vulnerability: 0,
-    secret: 0,
-    misconfiguration: 0,
-    license: 0,
-  };
+  const kindCounts = emptyKindCounts();
 
   for (const finding of findings) {
     counts[finding.severity] += 1;
@@ -1895,6 +2021,16 @@ Expected: PASS, 11 тестов.
 git add test/fixtures/trivy src/task/ReportParser.ts src/task/__tests__/ReportParser.test.ts
 git commit -m "feat: normalize trivy json reports and version output"
 ```
+
+- [ ] **Step 10: Обеззараживание и устойчивость к кривому JSON (по итогам ревью)**
+
+Текстовые поля находок обеззараживаются на входе в модель: управляющие символы схлопываются в пробел. Причина — имена пакетов и версии в сканах `filesystem` и `repository` берутся из lock-файлов, то есть их содержимое контролирует автор зависимости, а дальше они попадают в logging-команды Azure Pipelines, где строка, начинающаяся с `##vso[`, исполняется агентом. Это одна половина защиты; вторая — экранирование в `Publisher` в момент сборки команды.
+
+Обеззараживание распространяется и на `artifactName`, `createdAt` и вывод `parseVersion`: они уходят во вкладку результатов и в сводку. Отдельно важно, что значения могут оказаться не строками — `{"Version": 42}` от враждебного образа раннера роняло таск уже **после** успешного скана.
+
+Модуль обязан завершаться либо валидным отчётом, либо `TrivyReportParseError`. Мимо этого контракта проходили: документ-`null`, `null` внутри `Results`, нестроковые `PkgName`/`Title`/`Severity` и `Vulnerabilities: 42`. Хуже всех — `Vulnerabilities: "abc"`: строка итерируема, поэтому вместо ошибки получались три находки-призрака.
+
+Понижение неизвестной severity до `UNKNOWN` остаётся (вывод trivy — не наш формат данных, и одна незнакомая метка не повод выбрасывать результат скана), но перестаёт быть безмолвным: `FailOn` исключает `UNKNOWN`, а сам он ниже всех, поэтому переименование метки в новой версии trivy сделало бы такие находки структурно неспособными завалить сборку — незаметно. Нераспознанные метки собираются и отдаются вызывающему для предупреждения.
 
 ---
 
@@ -2049,6 +2185,15 @@ git add src/task/GateEvaluator.ts src/task/__tests__/GateEvaluator.test.ts
 git commit -m "feat: evaluate build gate from normalized report"
 ```
 
+- [ ] **Step 6: Порядок, структура и словарь порога (по итогам ревью)**
+
+- `blocking` возвращается отсортированным по убыванию severity. В порядке отчёта при 40 MEDIUM и 3 CRITICAL публикатор, режущий список на 20, выпишет двадцать MEDIUM, а все CRITICAL уедут в строчку «и ещё N»; вкладка отрендерит тот же список с тем же эффектом.
+- Сообщение о падении добавляет общее число находок: `2 CRITICAL at or above the failOn threshold CRITICAL (502 findings total)`. Иначе ветка падения считает только блокирующие, ветка предупреждения — все, и читатель не знает, какой знаменатель перед ним.
+- `GateResult` отдаёт не только готовую английскую строку, но и разобранные части: `threshold`, `blockingCounts: SeverityCounts`, `blockingKindCounts: KindCounts`. Строку `reason` нужно показать и в текстовой сводке сборки, и в HTML-шапке вкладки, а перестроить её они не могут, не разбирая английский текст. Счётчики по видам важны отдельно: на CRITICAL-секрет и CRITICAL-CVE реакция совершенно разная — ротировать учётку против обновить пакет.
+- `failOn: 'UNKNOWN'` убирается на уровне типа (`Exclude<Severity, 'UNKNOWN'>`): `isAtLeast(x, 'UNKNOWN')` истинно для любой severity, то есть это самый строгий порог из возможных, тогда как в выпадающем списке администратор прочитает его как «падать только на неоценённых находках» — ровно наоборот. Отдельным док-комментарием фиксируется и обратное решение: находка с `UNKNOWN` не блокирует гейт `CRITICAL`, хотя «trivy не смог оценить» не то же самое, что «не важно».
+
+Тесты, которых не хватало: `blocking` пуст при `failOn: 'none'` (без этого отключённый гейт напишет двадцать красных issue в сборку), множественное число в ветке предупреждения, и хоть какое-то покрытие `UNKNOWN`.
+
 ---
 
 ## Task 11: Запуск процессов
@@ -2187,6 +2332,14 @@ Expected: PASS, 5 тестов.
 git add src/task/ProcessRunner.ts src/task/__tests__/ProcessRunner.test.ts
 git commit -m "feat: child process runner with timeout and stdin support"
 ```
+
+- [ ] **Step 6: Не ронять процесс на EPIPE (по итогам ревью)**
+
+У `child.stdin` нет обработчика `error`, а событие `'error'` на `EventEmitter` без слушателя бросается синхронно и убивает **весь** процесс таска, а не одну операцию. Воспроизведено: дочерний процесс, завершившийся раньше, чем прочитал stdin, даёт `write EPIPE` и падение с кодом 1. Это ровно тот путь, которым пароль уходит в `docker login --password-stdin`.
+
+Обработчик вешается до записи. `EPIPE` и `ERR_STREAM_DESTROYED` игнорируются — это штатная ситуация, когда дочерний процесс не стал читать ввод, и его собственный код возврата уже всё объясняет. Любая другая ошибка stdin дописывается в собранный `stderr`, иначе крах меняется на невидимый сбой.
+
+Отдельно фиксируется в док-комментарии, почему промис резолвится на `close`, а не на `exit`: `close` дожидается закрытия потоков, поэтому вывод собирается целиком. Полнота вывода при этом всё равно зависит от того, успел ли дочерний процесс сбросить буфер перед выходом — у Go-бинарника trivy запись в пайп блокирующая, так что это не наша проблема, но знать об этом читателю нужно.
 
 ---
 
@@ -2384,6 +2537,16 @@ git add src/task/ConfigClient.ts src/task/__tests__/ConfigClient.test.ts
 git commit -m "feat: read admin settings from extension data service"
 ```
 
+- [ ] **Step 6: Отличать «не настроено» от «сломано» (по итогам ревью)**
+
+`JSON.parse` уходит внутрь `try`: ответ 200 с HTML-страницей входа — реалистичный сценарий для on-prem — иначе приезжал сырым `SyntaxError` без единого намёка на то, что читался документ настроек. В сообщение попадает начало тела, обрезанное и обеззараженное (без управляющих символов и без `##vso[`), чтобы «это была страница логина» было видно сразу.
+
+Ответ 200 без поля `value` — тоже ошибка, а не «ещё не настроено»: иначе испорченный документ выглядел бы для администратора как ненастроенный. Единственный путь, возвращающий `undefined`, — 404.
+
+`collectionUri` проверяется на непустоту и схему с указанием `System.CollectionUri`, иначе сообщение выглядело как сетевая проблема и не называло настоящую причину. Из всех сообщений вырезается userinfo: `https://user:s3cr3t@ado.corp/DC` иначе печатается в лог сборки целиком.
+
+`documentId`, `publisher` и `extensionId` кодируются перед подстановкой в URL. `%24settings` при этом трогать нельзя — это уже закодированное имя коллекции `$settings`.
+
 ---
 
 ## Task 12b: HTTP-клиент без глобального fetch
@@ -2499,6 +2662,17 @@ git add src/task/httpFetch.ts src/task/__tests__/httpFetch.test.ts
 git commit -m "feat: minimal http client so the task runs on node 16"
 ```
 
+- [ ] **Step 6: Ограничить запрос по-настоящему (по итогам ревью)**
+
+Запрос обязан завершаться всегда. Наивная версия не завершалась в двух случаях, оба воспроизведены:
+
+- **разрыв посреди тела.** Единственный путь отказа висел на `request.on('error')`, а Node при преждевременном закрытии сообщает об ошибке на **ответе**, а не на запросе; сторож, зарегистрированный через `request.setTimeout`, умирает вместе с сокетом. И `socket.destroy()` (RST), и `socket.end()` при недобранном `Content-Length` оставляли промис висеть навсегда — то есть ровно то, ради чего таймаут и вводился. Нужны слушатели `error` и `aborted` на ответе;
+- **медленная капля.** `request.setTimeout` сбрасывается на каждом байте, поэтому сервер, отдающий по байту раз в 29 секунд, при умолчании в 30 секунд держит сборку бесконечно. Нужен общий дедлайн в замыкании, а не сторож простоя.
+
+Тело ответа буферизуется целиком, поэтому нужен предел размера: документ настроек весит килобайты, а восьмимегабайтный ответ принимался молча. При превышении — отказ с указанием предела, не тихое обрезание: обрезанный документ упал бы позже на разборе JSON с невнятным сообщением.
+
+Все три таймаутных теста передавали явные 50 мс, поэтому умолчание, которое и защищает продакшен, не проверялось вообще; замена его на ~24 дня проходила весь набор.
+
 ---
 
 ## Task 13: Чтение inputs таска
@@ -2579,14 +2753,13 @@ Expected: FAIL — `Cannot find module '../inputs'`.
 
 ```ts
 import * as tl from 'azure-pipelines-task-lib/task';
-import { parseSeverityList } from '../shared/severity';
+import { parseSeverity, parseSeverityList } from '../shared/severity';
 import {
   FailOn,
   OutputFormat,
   SbomFormat,
   Scanner,
   ScanType,
-  Severity,
   TaskInputs,
 } from '../shared/types';
 
@@ -2640,10 +2813,7 @@ export function readInputs(): TaskInputs {
 
   let failOn: FailOn | undefined;
   if (failOnRaw !== undefined) {
-    failOn =
-      failOnRaw.trim().toLowerCase() === 'none'
-        ? 'none'
-        : (parseSeverityList(failOnRaw)[0] as Severity);
+    failOn = failOnRaw.trim().toLowerCase() === 'none' ? 'none' : parseSeverity(failOnRaw);
   }
 
   return {
@@ -2679,6 +2849,19 @@ Expected: PASS, 8 тестов.
 git add src/task/inputs.ts src/task/__tests__/inputs.test.ts
 git commit -m "feat: read and validate task inputs"
 ```
+
+- [ ] **Step 6: Разбор значений и сообщения (по итогам ревью)**
+
+Показанный выше код для `failOn` не компилируется против нынешнего `FailOn`: `parseSeverity` возвращает `Severity`, куда входит `UNKNOWN`. Появляется `parseFailOn`, который отвергает `UNKNOWN` отдельным сообщением — порогом это значение быть не может, оно заблокировало бы всё.
+
+Прочее:
+
+- `listOf` бросает исключение, если после отбрасывания пустых элементов не осталось ничего. Иначе `scanners: ' '` даёт `[]`, а пустой массив — это не `undefined`, поэтому `ConfigResolver` принимает его за настоящее переопределение и выбрасывает настройку админа; для `formats` пустой массив ещё и обходит фоллбэк `?? ['table','json']`, и скан не пишет вообще никакого вывода;
+- сообщения об ошибках называют input. `failOn: 'critcal'` раньше сообщал `Unknown severity "CRITCAL". Allowed values: UNKNOWN, ...` — реклама `UNKNOWN`, который двумя строками ниже отвергается, отсутствие `none`, который разрешён, и ни слова о том, какой из двух severity-подобных inputs виноват;
+- `oneOf` приводит значение к нижнему регистру: все четыре словаря лежат в нижнем регистре, а до этого `severities: 'critical'` работало, тогда как `scanType: 'Image'` падало;
+- `runner`, `ignoreFile`, `workingDirectory`, `targetRegistryConnection` обрезаются по краям — `tl.getInput` этого не делает, и `runner: ' hardened '` падал с сообщением `Runner " hardened " is not available`. `target` намеренно не обрезается: он эхом уходит дальше, и тихая правка спрятала бы опечатку автора пайплайна.
+
+**Контракт с `task.json`, без которого рушится вся модель:** ни у одного input, кроме `scanType`, не должно быть `defaultValue`. Агент материализует объявленные умолчания в переменные `INPUT_*` непустыми строками, поэтому `defaultValue: "false"` сделает `getInput` возвращающим `'false'` на каждом запуске — неотличимо от того, что автор пайплайна задал значение сам. Дальше `ConfigResolver` либо молча переопределит настройку администратора, либо при строгой политике завалит каждую сборку, назвав поле, которого никто не трогал. Модуль защититься от этого не может, поэтому контракт записан док-комментарием у `readInputs` и продублирован в Task 16.
 
 ---
 
@@ -2779,7 +2962,7 @@ Expected: FAIL — `Cannot find module '../Publisher'`.
 - [ ] **Step 3: Реализовать `src/task/Publisher.ts`**
 
 ```ts
-import { SEVERITY_ORDER } from '../shared/severity';
+import { compareSeverity, SEVERITY_ORDER } from '../shared/severity';
 import { Finding, NormalizedReport } from '../shared/types';
 
 const MAX_LOGGED_FINDINGS = 20;
@@ -3097,7 +3280,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   if (scan.timedOut) {
     await processRunner.run('docker', ['rm', '-f', containerName(config)]);
     throw new ScanExecutionError(
-      `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
+      `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the collection default.`,
     );
   }
 
@@ -3391,9 +3574,7 @@ function buildArgs(
       return;
     }
 
-    const rows = [...report.findings].sort(
-      (a, b) => SEVERITY_ORDER.indexOf(b.severity) - SEVERITY_ORDER.indexOf(a.severity),
-    );
+    const rows = [...report.findings].sort((a, b) => compareSeverity(b.severity, a.severity));
 
     this.write('SEVERITY  ID                   PACKAGE                   FIXED IN');
     for (const finding of rows) {
@@ -3431,7 +3612,7 @@ function buildArgs(
     if (scan.timedOut) {
       await processRunner.run('docker', ['rm', '-f', containerName(config)]);
       throw new ScanExecutionError(
-        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the project default.`,
+        `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the collection default.`,
       );
     }
 
@@ -3544,6 +3725,8 @@ git commit -m "feat: sarif artifact, sbom generation and findings table"
 
 - [ ] **Step 1: Создать `src/task/task.json`**
 
+⚠️ Ни у одного input, кроме `scanType`, не должно быть `defaultValue`. Агент подставляет объявленные умолчания в переменные `INPUT_*` непустыми строками, и тогда `readInputs` не может отличить «пайплайн промолчал» от «пайплайн задал значение». Результат — либо молчаливое переопределение настройки администратора, либо, при строгом `allowOverrides`, падение каждой сборки с указанием поля, которого автор пайплайна не касался. Умолчания живут в настройках коллекции и применяются в `ConfigResolver`; `defaultValue` у `scanType` допустим только потому, что это не поле политики.
+
 `id` — фиксированный GUID таска; сгенерируйте свой один раз командой `node -e "console.log(require('crypto').randomUUID())"` и подставьте вместо значения ниже, после чего больше никогда не меняйте.
 
 ```json
@@ -3591,7 +3774,7 @@ git commit -m "feat: sarif artifact, sbom generation and findings table"
       "type": "string",
       "label": "Runner alias",
       "required": false,
-      "helpMarkDown": "Alias from Project Settings > Trivy Scanner. Leave empty to use the default runner."
+      "helpMarkDown": "Alias from Collection Settings > Trivy Scanner. Leave empty to use the default runner."
     },
     { "name": "severities", "type": "string", "label": "Severities", "required": false, "groupName": "policy" },
     { "name": "scanners", "type": "string", "label": "Scanners", "required": false, "groupName": "policy" },
@@ -3604,7 +3787,6 @@ git commit -m "feat: sarif artifact, sbom generation and findings table"
       "type": "pickList",
       "label": "Generate SBOM",
       "required": false,
-      "defaultValue": "off",
       "groupName": "output",
       "options": { "off": "Off", "cyclonedx": "CycloneDX", "spdx-json": "SPDX JSON" }
     },
@@ -3634,6 +3816,7 @@ import { readInputs } from './inputs';
 import { ChildProcessRunner } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { runScan } from './run';
+import { validateCatalog, validateDefaults, validateRunner } from '../shared/validation';
 import { AgentContext, DefaultsConfig, RunnerConfig } from '../shared/types';
 
 const PUBLISHER = 'iksoftware';
@@ -3700,7 +3883,26 @@ async function main(): Promise<void> {
 
     if (!defaults) {
       throw new Error(
-        'The project has no Trivy settings yet. Open Project Settings > Trivy Scanner and configure the database mirror and at least one runner.',
+        'The collection has no Trivy settings yet. Open Collection Settings > Trivy Scanner and configure the database mirror and at least one runner.',
+      );
+    }
+
+    // The documents are hand-editable through the REST API, so validate before building a docker command from them.
+    const issues = [
+      ...validateDefaults(defaults),
+      ...validateCatalog(runners),
+      ...runners.flatMap((runner, index) =>
+        validateRunner(runner).map((issue) => ({
+          field: `runners[${index}].${issue.field}`,
+          message: issue.message,
+        })),
+      ),
+    ];
+    if (issues.length > 0) {
+      throw new Error(
+        `The Trivy settings for this collection are invalid:\n${issues
+          .map((issue) => `  ${issue.field}: ${issue.message}`)
+          .join('\n')}`,
       );
     }
 
@@ -3747,6 +3949,11 @@ git commit -m "feat: task entry point and pipeline task definition"
 ## Task 17: Интеграционный тест с подставным docker
 
 Ловит расхождение между построенным argv и тем, что реально уходит в процесс — единственное место, где `ChildProcessRunner`, `DockerCommand` и `run.ts` работают вместе.
+
+Две вещи, выясненные при реализации:
+
+- **Передавать данные подставному docker через `process.env` нельзя.** Под ts-jest тестовый файл исполняется в отдельном контексте, и `spawn` без явной опции `env` берёт окружение настоящего процесса, а не то, что тест только что записал в `process.env`. Вариант из плана с `FAKE_DOCKER_LOG` молча не работал: скрипт получал `undefined`. Данные передаются через файл-контекст в системном временном каталоге, имя которого содержит `process.pid`, а дочерний процесс читает его по `process.ppid`. На продакшен это не влияет — там процесс один.
+- `--output` в argv встречается дважды, потому что `DockerCommand` переутверждает формат и путь после `extraTrivyArgs`. Подставной docker обязан читать **последнее** вхождение: чтение первого прошло бы даже при регрессе этой защиты.
 
 **Files:**
 - Create: `test/integration/fake-docker.js`, `test/integration/scan.test.ts`
@@ -3965,11 +4172,11 @@ team approved.
 
 ## Why this instead of running trivy directly
 
-- **Curated runners.** Administrators register the allowed trivy images in Project Settings.
+- **Curated runners.** Administrators register the allowed trivy images in Collection Settings.
   Pipelines pick one by alias, so upgrading trivy everywhere is a single edit.
 - **Works in a closed network.** The vulnerability database comes from an internal OCI registry
   mirror and a persistent cache on the agent. No call ever leaves your network.
-- **One place for the gate.** Severity thresholds live in project settings; pipelines may
+- **One place for the gate.** Severity thresholds live in collection-wide settings; pipelines may
   override only what the policy allows.
 - **Readable results.** A Trivy tab on the build shows why the gate failed, the counts per
   severity, and every finding with filters.
@@ -3983,7 +4190,7 @@ team approved.
     target: myapp:$(Build.BuildId)
 ```
 
-Configure runners and defaults under **Project Settings > Trivy Scanner**.
+Configure runners and defaults under **Collection Settings > Trivy Scanner**.
 ```
 
 - [ ] **Step 4: Создать `README.md`**
@@ -4140,7 +4347,11 @@ execSync('npm install --omit=dev --no-package-lock', { cwd: out, stdio: 'inherit
 console.log(`Task assembled in ${out}`);
 ```
 
-Компилятор кладёт `src/task/*` в `build/task/*`, а `src/shared/*` в `build/shared/*`; относительные импорты `../shared/...` из `build/task` указывают на `build/shared`, поэтому копирование `shared` рядом с `index.js` сохраняет ту же относительную структуру только при переносе на уровень выше. Чтобы не полагаться на догадки, следующий шаг это проверяет запуском.
+Компилятор кладёт `src/task/*` в `build/task/*`, а `src/shared/*` в `build/shared/*`, и скомпилированный таск требует `../shared/...`. Плоская раскладка (содержимое `build/task` прямо в `TrivyScan/`, а `shared` — в `TrivyScan/shared`) эту связь ломает: из `TrivyScan/inputs.js` путь `../shared/...` уходит **выше** каталога пакета. Проверено запуском — получается `Error: Cannot find module '../shared/severity'`.
+
+Поэтому раскладка внутри пакета повторяет структуру `build/`: код таска в `TrivyScan/task/`, общий код в `TrivyScan/shared/`. При этом сам `task.json` обязан лежать в корне `TrivyScan/`, где его ищут tfx и агент, поэтому скрипт читает `src/task/task.json`, переписывает в памяти `execution.*.target` с `index.js` на `task/index.js` и кладёт в пакет уже исправленную копию. Исходный `src/task/task.json` не трогается.
+
+Ошибка такого рода не видна до установки: `.vsix` собирается, ставится, и падает на агенте заказчика. Поэтому следующий шаг проверяет сборку запуском, а CI повторяет ту же проверку на каждом pull request, а не только на теге.
 
 - [ ] **Step 3: Добавить скрипты в `package.json`**
 
@@ -4158,7 +4369,7 @@ npm run build:task
 node -e "process.env.INPUT_TARGET='app:1'; require('./TrivyScan/index.js')" 2>&1 | head -5
 ```
 
-Expected: процесс стартует и падает на отсутствии переменных агента (сообщение про настройки проекта или про `System.CollectionUri`), но **не** на `Cannot find module`. Если появляется `Cannot find module '../shared/types'`, поправьте `scripts/build-task.js`: положите содержимое `build/` целиком в `TrivyScan/`, а точкой входа в `task.json` укажите `task/index.js`.
+Expected: процесс стартует и падает на отсутствии переменных агента (сообщение про настройки коллекции или про `System.CollectionUri`), но **не** на `Cannot find module`. Если появляется `Cannot find module '../shared/types'`, поправьте `scripts/build-task.js`: положите содержимое `build/` целиком в `TrivyScan/`, а точкой входа в `task.json` укажите `task/index.js`.
 
 - [ ] **Step 5: Создать `.github/workflows/ci.yml`**
 

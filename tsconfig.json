@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "commonjs",
+    "lib": ["ES2021"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "declaration": false,
+    "sourceMap": true,
+    // This config has no outDir, so a bare `tsc -p tsconfig.json` would emit .js next to every source.
+    // Jest resolves .js before .ts, so those stale files silently shadow edited sources. Compilation
+    // is tsconfig.build.json's job; this one only ever type-checks.
+    "noEmit": true
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts"]
+}
