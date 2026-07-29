@@ -1,0 +1,46 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-07-28T09:12:44.512Z",
+  "ArtifactName": "app:1.4.2",
+  "ArtifactType": "container_image",
+  "Metadata": { "OS": { "Family": "debian", "Name": "12.5" } },
+  "Results": [
+    {
+      "Target": "app:1.4.2 (debian 12.5)",
+      "Class": "os-pkgs",
+      "Type": "debian",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2024-21626",
+          "PkgName": "runc",
+          "InstalledVersion": "1.1.7-0+deb12u1",
+          "FixedVersion": "1.1.12-0+deb12u1",
+          "Severity": "CRITICAL",
+          "Title": "runc: file descriptor leak allows container escape"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-45853",
+          "PkgName": "zlib1g",
+          "InstalledVersion": "1:1.2.13.dfsg-1",
+          "Severity": "CRITICAL",
+          "Title": "zlib: integer overflow in zipOpenNewFileInZip4_64"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-2961",
+          "PkgName": "libc6",
+          "InstalledVersion": "2.36-9+deb12u4",
+          "FixedVersion": "2.36-9+deb12u7",
+          "Severity": "HIGH",
+          "Title": "glibc: out of bounds write in iconv"
+        },
+        {
+          "VulnerabilityID": "CVE-2023-4641",
+          "PkgName": "passwd",
+          "InstalledVersion": "1:4.13+dfsg1-1",
+          "Severity": "MEDIUM",
+          "Title": "shadow-utils: possible password leak"
+        }
+      ]
+    }
+  ]
+}
