@@ -1,0 +1,74 @@
+{
+  "id": "67004c07-e6c6-4ea7-92c4-43bfd57aecba",
+  "name": "TrivyScan",
+  "friendlyName": "Trivy Scan (containerized)",
+  "description": "Run Trivy from a curated docker runner image and gate the build on findings.",
+  "author": "iksoftware",
+  "helpMarkDown": "See the project README for configuration.",
+  "category": "Utility",
+  "visibility": ["Build", "Release"],
+  "demands": [],
+  "version": { "Major": 1, "Minor": 0, "Patch": 0 },
+  "instanceNameFormat": "Trivy scan $(target)",
+  "groups": [
+    { "name": "policy", "displayName": "Severity and gate", "isExpanded": true },
+    { "name": "output", "displayName": "Output", "isExpanded": false },
+    { "name": "advanced", "displayName": "Advanced", "isExpanded": false }
+  ],
+  "inputs": [
+    {
+      "name": "scanType",
+      "type": "pickList",
+      "label": "Scan type",
+      "defaultValue": "image",
+      "required": true,
+      "options": {
+        "image": "Container image",
+        "filesystem": "Filesystem",
+        "repository": "Repository",
+        "config": "IaC misconfiguration",
+        "sbom": "SBOM file"
+      }
+    },
+    {
+      "name": "target",
+      "type": "string",
+      "label": "Target",
+      "required": true,
+      "helpMarkDown": "Image reference for an image scan, otherwise a path relative to the sources directory."
+    },
+    {
+      "name": "runner",
+      "type": "string",
+      "label": "Runner alias",
+      "required": false,
+      "helpMarkDown": "Alias from Project Settings > Trivy Scanner. Leave empty to use the default runner."
+    },
+    { "name": "severities", "type": "string", "label": "Severities", "required": false, "groupName": "policy" },
+    { "name": "scanners", "type": "string", "label": "Scanners", "required": false, "groupName": "policy" },
+    { "name": "failOn", "type": "string", "label": "Fail on severity", "required": false, "groupName": "policy" },
+    { "name": "ignoreUnfixed", "type": "boolean", "label": "Ignore unfixed", "required": false, "groupName": "policy" },
+    { "name": "ignoreFile", "type": "filePath", "label": "Ignore file", "required": false, "groupName": "policy" },
+    { "name": "formats", "type": "string", "label": "Output formats", "required": false, "groupName": "output" },
+    {
+      "name": "generateSbom",
+      "type": "pickList",
+      "label": "Generate SBOM",
+      "required": false,
+      "groupName": "output",
+      "options": { "off": "Off", "cyclonedx": "CycloneDX", "spdx-json": "SPDX JSON" }
+    },
+    { "name": "publishArtifact", "type": "boolean", "label": "Publish report artifact", "required": false, "groupName": "output" },
+    { "name": "targetRegistryConnection", "type": "connectedService:dockerregistry", "label": "Registry connection for the scanned image", "required": false, "groupName": "advanced" },
+    { "name": "configConnection", "type": "connectedService:Generic", "label": "Settings connection (PAT)", "required": false, "groupName": "advanced", "helpMarkDown": "Only needed when the job cannot read extension settings with its OAuth token." },
+    { "name": "useDockerSocket", "type": "boolean", "label": "Mount the docker socket", "required": false, "groupName": "advanced" },
+    { "name": "skipDbUpdate", "type": "boolean", "label": "Skip database update", "required": false, "groupName": "advanced" },
+    { "name": "timeoutMinutes", "type": "string", "label": "Timeout in minutes", "required": false, "groupName": "advanced" },
+    { "name": "extraTrivyArgs", "type": "string", "label": "Extra trivy arguments", "required": false, "groupName": "advanced" },
+    { "name": "workingDirectory", "type": "filePath", "label": "Working directory", "required": false, "groupName": "advanced" }
+  ],
+  "execution": {
+    "Node16": { "target": "index.js" },
+    "Node20_1": { "target": "index.js" }
+  }
+}
