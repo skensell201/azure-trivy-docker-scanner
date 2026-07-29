@@ -98,7 +98,7 @@ Scopes манифеста: `vso.build_execute`, `vso.extension_data`.
 | `failOn` | нет | Дефолт `CRITICAL`; значение `none` — сканировать без гейта |
 | `ignoreUnfixed` | нет | Дефолт `false` |
 | `timeoutMinutes` | нет | Дефолт `10` |
-| `allowOverrides` | нет | Поля, доступные для переопределения из пайплайна. Дефолт — все, кроме `dbRepository` и выбора раннеров |
+| `allowOverrides` | нет | Поля, доступные для переопределения из пайплайна: `runner`, `severities`, `scanners`, `failOn`, `ignoreUnfixed`, `timeoutMinutes`, `skipDbUpdate`, `useDockerSocket`, `extraTrivyArgs`, `ignoreFile`. Отсутствие поля означает «можно всё», пустой массив — «нельзя ничего» |
 
 ### Inputs таска `TrivyScan@1`
 
@@ -119,6 +119,16 @@ Scopes манифеста: `vso.build_execute`, `vso.extension_data`.
 
 Попытка переопределить запрещённое политикой поле — ошибка таска с явным сообщением.
 Тихое игнорирование политики хуже красной сборки: пользователь считает, что его настройка применилась.
+
+Под политику обязательно попадают `extraTrivyArgs`, `ignoreFile` и `useDockerSocket`, иначе она обходится
+через боковую дверь: trivy построен на cobra, где из двух одинаковых флагов выигрывает последний, поэтому
+`extraTrivyArgs: '--severity LOW --ignore-unfixed'` отменяет запертые админом `severities` и `ignoreUnfixed`;
+`.trivyignore` глушит находки целиком и тем самым обходит `failOn`; а `useDockerSocket` монтирует docker-сокет,
+что равносильно root на агенте сборки.
+
+`scanType` и `target` политике не подчиняются намеренно — это и есть сам скан, а не настройка политики.
+`formats`, `generateSbom`, `publishArtifact` и `workingDirectory` тоже остаются свободными: это вывод и
+обвязка, запирать их нечего.
 
 Валидация живёт в `shared/validation.ts` и используется и админкой (не даёт сохранить мусор),
 и таском (переживает вручную испорченный документ).

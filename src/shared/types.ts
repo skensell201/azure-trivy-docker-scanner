@@ -16,7 +16,10 @@ export type OverridableField =
   | 'failOn'
   | 'ignoreUnfixed'
   | 'timeoutMinutes'
-  | 'skipDbUpdate';
+  | 'skipDbUpdate'
+  | 'useDockerSocket'
+  | 'extraTrivyArgs'
+  | 'ignoreFile';
 
 export interface RunnerConfig {
   alias: string;

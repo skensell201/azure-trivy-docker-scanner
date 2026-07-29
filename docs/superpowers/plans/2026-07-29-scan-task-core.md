@@ -256,7 +256,10 @@ export type OverridableField =
   | 'failOn'
   | 'ignoreUnfixed'
   | 'timeoutMinutes'
-  | 'skipDbUpdate';
+  | 'skipDbUpdate'
+  | 'useDockerSocket'
+  | 'extraTrivyArgs'
+  | 'ignoreFile';
 
 export interface RunnerConfig {
   alias: string;
@@ -1140,6 +1143,22 @@ Expected: PASS, 10 тестов.
 git add src/task/ConfigResolver.ts src/task/__tests__/ConfigResolver.test.ts
 git commit -m "feat: resolve scan config from defaults, catalog and inputs"
 ```
+
+- [ ] **Step 6: Закрыть обход политики и связать `pick` с полем (по итогам ревью)**
+
+Три поля доходили до `ResolvedScanConfig` мимо `pick`, и каждое отменяет политику:
+
+- `extraTrivyArgs` дописывается после `--severity` и `--scanners`, а в cobra выигрывает последнее вхождение флага, так что `allowOverrides: []` не мешает пайплайну написать `--severity LOW --ignore-unfixed`;
+- `ignoreFile` глушит находки через `.trivyignore` и обходит `failOn`;
+- `useDockerSocket` монтирует docker-сокет — root на агенте.
+
+Поэтому `OverridableField` расширяется этими тремя полями (см. Task 3), и все три идут через `pick`. `scanType` и `target` остаются вне политики намеренно, как и `formats`, `generateSbom`, `publishArtifact`, `workingDirectory`.
+
+Заодно чинится сам `pick`: сейчас `pick('severities', inputs.failOn, ...)` компилируется, то есть ключ политики и значение можно случайно взять из разных полей — гейт встанет не на то поле и сообщение назовёт не то имя. Ключ связывается со значением через `F extends OverridableField & keyof TaskInputs`, а `ALL_OVERRIDABLE` выводится из литерала с `satisfies Record<OverridableField, ...>`, иначе список молча расходится с союзом и новое поле оказывается непереопределяемым даже при опущенном `allowOverrides`. Проверка присутствия остаётся `=== undefined`: явный `false` из пайплайна должен побеждать.
+
+Сообщения: пустой список включённых раннеров не печатается как `Enabled runners: .`; отключённый раннер по умолчанию описывается теми же словами, что в `validateCatalog`, а не советом «пометьте раннер по умолчанию»; опечатка в алиасе отличается от намеренно отключённого раннера; `PolicyViolationError` называет действующее значение; `runner: ''` считается отсутствующим. Все нарушения политики собираются и сообщаются одним исключением, иначе пайплайн чинит их по одному за сборку.
+
+Тесты: мутационное тестирование показало 14 регрессий, проходящих весь набор, — в том числе замена `useDockerSocket ?? false` на `?? true`, монтирующая docker-сокет в каждую сборку. Закрывается двумя проверками целиком собранного объекта: на минимальном входе (фиксирует все встроенные умолчания) и на полностью заполненных `defaults` и `inputs` при разрешающей политике (фиксирует все pass-through и приоритеты).
 
 ---
 
