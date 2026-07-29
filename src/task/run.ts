@@ -168,6 +168,9 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     publisher.printFindingsTable(report);
   }
   publisher.attachReport(reportPath, config.scanIndex);
+  if (config.publishArtifact) {
+    publisher.publishArtifact(reportPath, 'TrivyReports');
+  }
   if (gate.blocking.length > 0) {
     publisher.logBlockingFindings(gate.blocking);
   }

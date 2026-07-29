@@ -151,6 +151,32 @@ describe('runScan', () => {
     expect(lines.some((line) => line.includes('task.addattachment'))).toBe(true);
   });
 
+  // The attachment above is what the results tab reads; the artifact is what a user
+  // downloads from the build. They are not the same publish, and publishArtifact
+  // defaults to true (ConfigResolver), so the default `invoke` helper exercises it.
+  it('publishes the report as a build artifact under TrivyReports when publishArtifact is set', async () => {
+    await invoke(new FakeRunner(writeReport));
+    expect(lines.some((line) => line.includes('artifactname=TrivyReports'))).toBe(true);
+  });
+
+  it('does not publish the report as a build artifact when publishArtifact is cleared', async () => {
+    const runner = new FakeRunner(writeReport);
+    await runScan({
+      defaults,
+      runners,
+      inputs: { ...inputs, publishArtifact: false },
+      agent,
+      scanIndex: 0,
+      processRunner: runner,
+      publisher: new Publisher((line) => lines.push(line)),
+      credentials: {},
+    });
+    expect(lines.some((line) => line.includes('artifactname=TrivyReports'))).toBe(false);
+    // The results-tab attachment is unaffected by publishArtifact: they are two
+    // different mechanisms, and turning off the artifact must not turn off the tab too.
+    expect(lines.some((line) => line.includes('task.addattachment'))).toBe(true);
+  });
+
   it('deletes the env file even when the scan fails', async () => {
     const runner = new FakeRunner();
     runner.results = [{ exitCode: 125, stdout: '', stderr: 'docker: not found', timedOut: false }];
