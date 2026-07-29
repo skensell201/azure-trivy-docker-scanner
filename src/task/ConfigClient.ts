@@ -25,6 +25,15 @@ export interface ConfigClientOptions {
 
 const API_VERSION = '3.2-preview.1';
 
+// Only this many characters of a malformed body are echoed back in an error
+// message: enough to recognize "this is an HTML sign-in page", not enough to
+// dump an entire unexpected response into the pipeline log.
+const BODY_PREVIEW_LENGTH = 200;
+
+function hasValueField(parsed: unknown): parsed is { value: unknown } {
+  return typeof parsed === 'object' && parsed !== null && 'value' in parsed;
+}
+
 /**
  * Reads administrator-maintained settings documents (runner catalog, global
  * defaults) from the Azure DevOps Extension Data Service.
@@ -33,12 +42,12 @@ export class ConfigClient {
   constructor(private readonly options: ConfigClientOptions) {}
 
   async readDocument<T>(documentId: string): Promise<T | undefined> {
-    const base = this.options.collectionUri.replace(/\/+$/, '');
+    const base = this.validatedBase();
     const url =
       `${base}/_apis/ExtensionManagement/InstalledExtensions/${this.options.publisher}/${this.options.extensionId}` +
       // %24settings is the URL-encoded literal collection name `$settings`
       // used by the Extension Data Service; not a bug.
-      `/Data/Scopes/Default/Current/Collections/%24settings/Documents/${documentId}?api-version=${API_VERSION}`;
+      `/Data/Scopes/Default/Current/Collections/%24settings/Documents/${encodeURIComponent(documentId)}?api-version=${API_VERSION}`;
 
     let response;
     try {
@@ -61,8 +70,38 @@ export class ConfigClient {
       );
     }
 
-    const document = JSON.parse(await response.text()) as { value: T };
-    return document.value;
+    const body = await response.text();
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body);
+    } catch {
+      throw new ConfigUnavailableError(
+        `The "${documentId}" settings document did not return valid JSON ` +
+          `(got: ${body.slice(0, BODY_PREVIEW_LENGTH)}).`,
+      );
+    }
+
+    if (!hasValueField(parsed)) {
+      throw new ConfigUnavailableError(`The "${documentId}" settings document response had no "value" field.`);
+    }
+
+    return parsed.value as T;
+  }
+
+  /**
+   * collectionUri comes from System.CollectionUri (or an equivalent input);
+   * validating it here, before ever calling fetch, means a misconfigured
+   * pipeline gets a message naming that variable instead of a generic
+   * connection failure against a hostless URL.
+   */
+  private validatedBase(): string {
+    const base = this.options.collectionUri.replace(/\/+$/, '');
+    if (!/^https?:\/\/.+/i.test(base)) {
+      throw new ConfigUnavailableError(
+        `System.CollectionUri is not set to a valid http(s) URL (got: "${this.options.collectionUri}").`,
+      );
+    }
+    return base;
   }
 
   private authHeader(): string {
