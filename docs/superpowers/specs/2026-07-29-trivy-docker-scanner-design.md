@@ -25,14 +25,26 @@
 | Админка | `ms.vss-web.hub` → `ms.vss-web.collection-admin-hub-group` | Браузер, React |
 | Вкладка результатов | `ms.vss-build-web.build-results-tab` | Браузер, React |
 
-Scopes манифеста: `vso.build_execute`, `vso.extension_data`.
+Scope манифеста: `vso.extension.data` — через точку, это единственное правильное написание;
+`vso.extension_data` не существует, и сервер отвергает установку с сообщением
+«Cannot mix uri based and modern scopes», потому что не может отнести неизвестное имя ни к одному
+поколению scope'ов.
+
+`vso.build_execute` расширению не нужен: вложения, артефакты и статус сборки публикуются
+logging-командами агента, то есть под токеном сборки, а не под токеном расширения. Этот scope ещё и
+высокоприватный — он даёт право запускать сборки, чего таск не делает.
+
+Админка из плана 2 будет писать документы настроек, и для неё scope придётся поднять до
+`vso.extension.data_write`, а вкладка результатов из плана 3 потребует `vso.build` на чтение вложений.
+Расширение прав при обновлении расширения требует повторного подтверждения администратором — это
+ожидаемо и лучше, чем просить лишние права заранее.
 
 ## Поток данных
 
 ```
 Админка ──пишет──> Extension Data Service (документы `runners`, `defaults`)
                               │
-                              │ REST + System.AccessToken (vso.extension_data)
+                              │ REST + System.AccessToken (vso.extension.data)
                               ▼
        inputs YAML ──> ConfigResolver ──> DockerCommand ──> docker run <runner> trivy …
                                                                     │ trivy JSON

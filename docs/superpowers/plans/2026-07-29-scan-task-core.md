@@ -4293,7 +4293,7 @@ git commit -m "docs: extension logo, overview and readme"
   "tags": ["trivy", "security", "containers", "vulnerability", "sbom"],
   "targets": [{ "id": "Microsoft.TeamFoundation.Server", "version": "[17.0,)" }],
   "icons": { "default": "images/icon.png" },
-  "scopes": ["vso.build_execute", "vso.extension_data"],
+  "scopes": ["vso.extension.data"],
   "contributions": [
     {
       "id": "trivy-scan-task",
