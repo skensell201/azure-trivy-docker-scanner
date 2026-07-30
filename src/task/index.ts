@@ -1,6 +1,7 @@
+import * as fs from 'fs';
 import * as tl from 'azure-pipelines-task-lib/task';
-import { ConfigClient } from './ConfigClient';
-import { httpFetch } from './httpFetch';
+import { ConfigClient, FetchLike } from './ConfigClient';
+import { createHttpFetch, httpFetch } from './httpFetch';
 import { readInputs } from './inputs';
 import { ChildProcessRunner } from './ProcessRunner';
 import { Publisher } from './Publisher';
@@ -34,16 +35,54 @@ function nextScanIndex(): number {
 }
 
 /**
+ * Reads the CA the agent was configured with at install time (`--sslcacert`, surfaced by
+ * `tl.getHttpCertConfiguration().caFile`), so this task's own HTTPS calls trust the same internal
+ * PKI the .NET agent already trusts via the OS trust store. Node on Linux does not read that
+ * store - it carries its own bundled roots - so on a server with an internal CA this is the one
+ * thing standing between a working task and "unable to get local issuer certificate" on literally
+ * the first request the task makes (reading the "runners" settings document).
+ *
+ * `certFile`/`keyFile` (a client certificate, i.e. mutual TLS) are deliberately ignored: that is a
+ * different feature from trusting a CA, nobody has asked for it, and wiring it through only
+ * partway (e.g. without also handling `passphrase`/`certArchiveFile` correctly) would be worse
+ * than not touching it at all.
+ *
+ * A CA file that cannot be read must not fail the whole task: the request may well succeed anyway
+ * (a proxy or load balancer terminating TLS with a publicly-trusted cert, for instance), so this
+ * warns, names the path, and falls back to `httpFetch` (Node's bundled roots only) rather than
+ * throwing.
+ */
+function buildFetch(): FetchLike {
+  const certConfiguration = tl.getHttpCertConfiguration();
+  if (!certConfiguration?.caFile) {
+    return httpFetch;
+  }
+
+  try {
+    const ca = fs.readFileSync(certConfiguration.caFile);
+    return createHttpFetch({ ca });
+  } catch (error) {
+    tl.warning(
+      `The agent's configured CA file (${certConfiguration.caFile}) could not be read: ` +
+        `${(error as Error).message}. Continuing with Node's default trusted roots; the request ` +
+        'may still succeed.',
+    );
+    return httpFetch;
+  }
+}
+
+/**
  * The authorization mode a build agent can use to read extension settings is still
  * undecided (spike in Task 2 needs a live server to answer it), so both paths are
  * implemented: a PAT via the `configConnection` service connection when the pipeline
  * author supplied one, otherwise the job's own `System.AccessToken`. Both branches go
- * through `httpFetch`, not the global `fetch`: the task also targets Node 16 agents
- * (see `execution` in task.json), which have no global fetch.
+ * through `fetch` built by `buildFetch()`, not the global `fetch`: the task also targets
+ * Node 16 agents (see `execution` in task.json), which have no global fetch.
  */
 function buildConfigClient(): ConfigClient {
   const collectionUri = tl.getVariable('System.CollectionUri') ?? '';
   const connection = tl.getInput('configConnection');
+  const fetch = buildFetch();
 
   if (connection) {
     const token =
@@ -55,7 +94,7 @@ function buildConfigClient(): ConfigClient {
       publisher: PUBLISHER,
       extensionId: EXTENSION_ID,
       auth: { mode: 'pat', token },
-      fetch: httpFetch,
+      fetch,
       log: (message) => tl.warning(message),
     });
   }
@@ -65,7 +104,7 @@ function buildConfigClient(): ConfigClient {
     publisher: PUBLISHER,
     extensionId: EXTENSION_ID,
     auth: { mode: 'bearer', token: tl.getVariable('System.AccessToken') ?? '' },
-    fetch: httpFetch,
+    fetch,
     // A missing document falls back to defaults; say so, otherwise a mistyped publisher or an
     // uninstalled extension looks exactly like an administrator who has not configured anything.
     log: (message) => tl.warning(message),

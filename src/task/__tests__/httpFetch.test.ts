@@ -1,8 +1,50 @@
 import * as http from 'http';
+import * as https from 'https';
 import * as net from 'net';
 import * as zlib from 'zlib';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { execSync } from 'child_process';
 import { AddressInfo } from 'net';
-import { httpFetch, DEFAULT_TIMEOUT_MS, MAX_BODY_BYTES } from '../httpFetch';
+import { httpFetch, createHttpFetch, DEFAULT_TIMEOUT_MS, MAX_BODY_BYTES } from '../httpFetch';
+
+/**
+ * Generates a throwaway self-signed cert/key pair for the TLS-trust tests below, using the
+ * `openssl` binary via `child_process` (Node has no built-in certificate generation). Returns
+ * `undefined` on any failure — no `openssl` on PATH, or an `openssl` too old/different to
+ * understand `-addext` (e.g. some LibreSSL builds) — so the affected tests can skip themselves
+ * explicitly instead of failing for a reason unrelated to the code under test. Mirrors the
+ * `permissionsAreEnforced()` probe in `run.test.ts`: a synchronous check at module load time
+ * feeding an `it`/`it.skip` ternary.
+ */
+function tryGenerateTlsFixture(): { cert: string; key: string } | undefined {
+  try {
+    execSync('openssl version', { stdio: 'ignore' });
+  } catch {
+    return undefined;
+  }
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'httpfetch-tls-'));
+  try {
+    const keyPath = path.join(dir, 'key.pem');
+    const certPath = path.join(dir, 'cert.pem');
+    execSync(
+      `openssl req -x509 -newkey rsa:2048 -nodes -days 1 ` +
+        `-subj "/CN=127.0.0.1" -addext "subjectAltName=IP:127.0.0.1" ` +
+        `-keyout "${keyPath}" -out "${certPath}"`,
+      { stdio: 'ignore' },
+    );
+    return { cert: fs.readFileSync(certPath, 'utf8'), key: fs.readFileSync(keyPath, 'utf8') };
+  } catch {
+    return undefined;
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const tlsFixture = tryGenerateTlsFixture();
+const itIfOpenssl = tlsFixture ? it : it.skip;
 
 describe('httpFetch', () => {
   let server: http.Server;
@@ -332,6 +374,54 @@ describe('httpFetch', () => {
       } finally {
         raceServer.close();
       }
+    });
+  });
+
+  // Real defect: an internal CA that Node's bundled root store does not know about (the OS trust
+  // store is irrelevant to Node on Linux) makes the very first settings read fail with "unable to
+  // get local issuer certificate". These tests stand up an actual HTTPS server presenting a
+  // self-signed certificate and prove createHttpFetch() rejects it by default, and that
+  // createHttpFetch({ ca }) with that same certificate lets the handshake succeed — asserting on
+  // the real TLS outcome, not merely that a `ca` option was threaded through.
+  describe('createHttpFetch: TLS trust for an internal CA', () => {
+    let tlsServer: https.Server | undefined;
+    let tlsBase = '';
+
+    beforeAll((done) => {
+      if (!tlsFixture) {
+        done();
+        return;
+      }
+      tlsServer = https.createServer({ key: tlsFixture.key, cert: tlsFixture.cert }, (_request, response) => {
+        response.writeHead(200, { 'content-type': 'application/json' }).end('{"value":[1,2]}');
+      });
+      tlsServer.listen(0, '127.0.0.1', () => {
+        tlsBase = `https://127.0.0.1:${(tlsServer!.address() as AddressInfo).port}`;
+        done();
+      });
+    });
+
+    afterAll((done) => {
+      if (!tlsServer) {
+        done();
+        return;
+      }
+      tlsServer.close(() => done());
+    });
+
+    itIfOpenssl(
+      'rejects the self-signed certificate when no CA is supplied (Node bundled roots only)',
+      async () => {
+        const fetch = createHttpFetch({ timeoutMs: 2000 });
+        await expect(fetch(`${tlsBase}/doc`, { headers: {} })).rejects.toThrow();
+      },
+    );
+
+    itIfOpenssl('succeeds once the server certificate is supplied as the trusted CA', async () => {
+      const fetch = createHttpFetch({ ca: tlsFixture!.cert, timeoutMs: 2000 });
+      const response = await fetch(`${tlsBase}/doc`, { headers: {} });
+      expect(response.ok).toBe(true);
+      await expect(response.text()).resolves.toBe('{"value":[1,2]}');
     });
   });
 });

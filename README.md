@@ -148,6 +148,63 @@ curl -sS -u ":$PAT" \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1"
 ```
 
+### Internal certificate authorities (on-premises servers)
+
+On a server whose HTTPS certificate is issued by an internal CA, the task can fail on its very
+first request — reading the `runners` settings document — with an error like:
+
+```
+Could not reach https://azure.example.com/Datagile to read the "runners" settings document:
+unable to get local issuer certificate
+```
+
+This is not a network or permissions problem: the build agent itself is .NET and reads the
+operating system's trust store without trouble, but this task is Node, and Node on Linux does
+**not** read the OS trust store — it carries its own bundled root certificates. Every collection
+whose Azure DevOps Server sits behind an internal PKI hits this immediately, and the symptom does
+not obviously point at certificates.
+
+Starting with `0.2.1` the task handles this automatically:
+
+- **The agent's own `--sslcacert` configuration is honored.** If the agent was installed with a
+  CA file (`tl.getHttpCertConfiguration().caFile`, the same setting the agent itself uses), the
+  task reads it and trusts it for its own HTTPS calls, in addition to Node's bundled roots. No
+  configuration is needed on the task or the pipeline for this case — if the agent already trusts
+  the server, so does the task. If that CA file cannot be read for some reason, the task logs a
+  warning naming the path and continues with Node's default trusted roots, since the request may
+  still succeed anyway (for example, behind a load balancer with a public certificate).
+- **`NODE_EXTRA_CA_CERTS` is the fallback** when the agent was not configured with `--sslcacert`
+  (or its CA file cannot be read). Set it as an environment variable on the pipeline step, pointing
+  at a PEM file on the agent, and Node picks it up directly:
+
+  ```yaml
+  - task: TrivyScan@1
+    env:
+      NODE_EXTRA_CA_CERTS: /etc/ssl/certs/internal-ca.pem
+    inputs:
+      target: myregistry.example.com/app:1.0
+  ```
+
+- **Trivy itself has the same problem, separately, inside the container.** The task's own HTTPS
+  calls (reading settings, described above) run in Node on the agent host; Trivy's calls (pulling
+  its vulnerability database and pulling/inspecting the scanned image) run as its own process
+  inside the runner container and make their own TLS connections to the registry — they do not
+  inherit the agent's or the task's trust configuration at all. If Trivy's registry is also behind
+  the internal CA, mount the CA certificate into the container's trust store via the runner's
+  **Extra docker args** field in the admin hub (Collection Settings > Trivy Scanner > Runners),
+  for example:
+
+  ```
+  -v /etc/ssl/certs/internal-ca.pem:/etc/ssl/certs/internal-ca.pem:ro
+  ```
+
+  (Adjust the container path to wherever the runner image's trust store expects extra CA files.)
+
+`--insecure` in `extraTrivyArgs` works as a stopgap that lets a scan proceed against an untrusted
+certificate, but it disables certificate verification entirely for that request — it should not be
+left in a pipeline long-term; fix the trust configuration above instead once it is confirmed
+working.
+
 #### The `configConnection` input
 
 By default the task reads both documents using the build job's own OAuth token

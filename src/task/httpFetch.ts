@@ -31,8 +31,30 @@ function sanitizeUrlForDisplay(rawUrl: string): string {
 }
 
 /**
- * Minimal fetch-like GET client built on `http`/`https`, so the task runs on Node 16, which has
- * no global `fetch`.
+ * Options for {@link createHttpFetch}. Deliberately does not include `certFile`/`keyFile`: a
+ * client certificate is a different feature (mutual TLS) from trusting an internal CA, nobody has
+ * asked for it, and half-implementing it here would be worse than not having it — see the comment
+ * at the `certFile`/`keyFile` call site in `index.ts` for the reasoning.
+ */
+export interface CreateHttpFetchOptions {
+  /**
+   * Extra certificate authority to trust, in addition to Node's bundled root store — typically
+   * the contents of the agent's `--sslcacert` file (`tl.getHttpCertConfiguration().caFile`), read
+   * by the caller. Passed straight through to `https.request`'s own `ca` option, so it accepts
+   * whatever that accepts (a single PEM string/Buffer, PEM chain, etc.).
+   */
+  ca?: string | Buffer;
+  /**
+   * Default timeout in milliseconds applied to requests made with the returned function when the
+   * call site does not pass its own (see the third parameter of the returned `FetchLike`).
+   * Defaults to {@link DEFAULT_TIMEOUT_MS}.
+   */
+  timeoutMs?: number;
+}
+
+/**
+ * Core of the fetch-like GET client shared by `httpFetch` and every closure `createHttpFetch`
+ * returns, built on `http`/`https` so the task runs on Node 16, which has no global `fetch`.
  *
  * The response body is decoded as UTF-8 unconditionally. That is safe because the only caller,
  * the Extension Data Service, always returns UTF-8 JSON. A server replying with a different
@@ -42,16 +64,12 @@ function sanitizeUrlForDisplay(rawUrl: string): string {
  * than silent: the compressed bytes decode to garbage text that fails `JSON.parse` in
  * `ConfigClient`. Neither charset negotiation nor gzip decoding is implemented on purpose — the
  * single endpoint this talks to needs neither, and either would be surface with no caller.
- *
- * Accepts an optional timeout in milliseconds, beyond the `FetchLike` contract: a function with an
- * extra optional parameter is still structurally assignable wherever a `FetchLike` is expected
- * (e.g. `new ConfigClient({ ..., fetch: httpFetch })`), so `ConfigClient` keeps using the default
- * while tests can pass a short one to stay fast.
  */
-export function httpFetch(
+function performFetch(
   url: string,
   init: { headers: Record<string, string> },
-  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  timeoutMs: number,
+  ca: string | Buffer | undefined,
 ): Promise<{ ok: boolean; status: number; text(): Promise<string> }> {
   const displayUrl = sanitizeUrlForDisplay(url);
 
@@ -73,9 +91,15 @@ export function httpFetch(
       action();
     };
 
+    // `ca` is meaningless to the plain `http` transport; only threaded into the request options
+    // when there is one to give it, so an http:// URL request is byte-identical to before this
+    // option existed.
+    const requestOptions: http.RequestOptions | https.RequestOptions =
+      ca === undefined ? { method: 'GET', headers: init.headers } : { method: 'GET', headers: init.headers, ca };
+
     const request = transport.request(
       parsed,
-      { method: 'GET', headers: init.headers },
+      requestOptions,
       (response) => {
         let body = '';
         let bytesReceived = 0;
@@ -147,6 +171,34 @@ export function httpFetch(
     });
     request.end();
   });
+}
+
+/**
+ * The `httpFetch` this module has always exported: Node's bundled root store, no extra CA.
+ * Accepts an optional timeout in milliseconds, beyond the `FetchLike` contract: a function with
+ * an extra optional parameter is still structurally assignable wherever a `FetchLike` is expected
+ * (e.g. `new ConfigClient({ ..., fetch: httpFetch })`), so `ConfigClient` keeps using the default
+ * while tests can pass a short one to stay fast. Kept as its own named function (rather than
+ * `createHttpFetch()`'s result) specifically so this three-argument form keeps type-checking at
+ * every existing call site — see `createHttpFetch` below for the CA-aware alternative.
+ */
+export function httpFetch(
+  url: string,
+  init: { headers: Record<string, string> },
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
+): Promise<{ ok: boolean; status: number; text(): Promise<string> }> {
+  return performFetch(url, init, timeoutMs, undefined);
+}
+
+/**
+ * Builds a `FetchLike` closed over an optional CA (and optional default timeout), so a caller
+ * that knows the agent's configured CA at startup (see `index.ts`) can hand `ConfigClient` a
+ * fetch that trusts it, without `ConfigClient` or `httpFetch` above ever needing to know that CA
+ * exists. `createHttpFetch()` with no options behaves like `httpFetch` with its default timeout.
+ */
+export function createHttpFetch(options: CreateHttpFetchOptions = {}): FetchLike {
+  const defaultTimeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  return (url, init) => performFetch(url, init, defaultTimeoutMs, options.ca);
 }
 
 // Compile-time proof that httpFetch satisfies the contract ConfigClient actually depends on.
