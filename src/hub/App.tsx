@@ -35,6 +35,11 @@ export function App({ store }: AppProps): JSX.Element {
   const [loadError, setLoadError] = React.useState<string | undefined>(undefined);
   const [issues, setIssues] = React.useState<ValidationIssue[]>([]);
   const [savedMessage, setSavedMessage] = React.useState<string | undefined>(undefined);
+  // Cross-runner problems found in a catalog that was already written by a delete (see
+  // handleDeleteRunner). Deliberately a separate piece of state from `issues`: those are
+  // blocking - add/edit never reaches the store while they are non-empty - while this one
+  // describes a write that already happened and cannot be undone by refusing it.
+  const [catalogWarning, setCatalogWarning] = React.useState<ValidationIssue[]>([]);
 
   React.useEffect(() => {
     let cancelled = false;
@@ -65,19 +70,25 @@ export function App({ store }: AppProps): JSX.Element {
     // runs once on mount rather than re-running on every render.
   }, []);
 
-  /** Writes a runner catalog and reflects the outcome, without deciding whether it is valid. */
-  const writeRunners = async (next: RunnerConfig[]): Promise<void> => {
+  /**
+   * Writes a runner catalog and reflects the outcome, without deciding whether it is valid.
+   * Returns whether the write actually landed, so callers that care - see `handleDeleteRunner` -
+   * can tell a real save from a rejected one.
+   */
+  const writeRunners = async (next: RunnerConfig[]): Promise<boolean> => {
     try {
       await store.saveRunners(next);
       setRunners(next);
       setSavedMessage('Saved.');
       setIssues([]);
+      return true;
     } catch (error) {
       if (error instanceof SettingsConflictError) {
         setIssues([{ field: 'runners', message: error.message }]);
-        return;
+        return false;
       }
       setIssues([{ field: 'runners', message: (error as Error).message }]);
+      return false;
     }
   };
 
@@ -95,6 +106,9 @@ export function App({ store }: AppProps): JSX.Element {
       setIssues(found);
       return;
     }
+    // A validated add/edit write can only ever produce a catalog validateCatalog accepts, so any
+    // warning left over from an earlier delete no longer applies.
+    setCatalogWarning([]);
     await writeRunners(next);
   };
 
@@ -108,9 +122,19 @@ export function App({ store }: AppProps): JSX.Element {
     await persistRunners(next);
   };
 
+  /**
+   * Deletion must always be able to proceed, even down to a catalog `validateCatalog` would
+   * reject - e.g. no runners left, or no default among what remains - because an administrator
+   * legitimately emptying the catalog cannot be trapped by the same rule that blocks an invalid
+   * add or edit. So the write happens unconditionally, and only afterwards is the resulting
+   * catalog checked; any problem is shown as a non-blocking warning, in its own element, never
+   * inside the `role="alert"` IssueList used for blocking add/edit errors, so the two cannot be
+   * confused by a test or by an administrator skimming the page.
+   */
   const handleDeleteRunner = async (runner: RunnerConfig): Promise<void> => {
     const next = (runners ?? []).filter((existing) => existing !== runner);
-    await writeRunners(next);
+    const saved = await writeRunners(next);
+    setCatalogWarning(saved ? validateCatalog(next) : []);
   };
 
   const handleSaveDefaults = async (next: DefaultsConfig): Promise<void> => {
@@ -137,7 +161,7 @@ export function App({ store }: AppProps): JSX.Element {
   }
 
   if (runners === undefined || defaults === undefined) {
-    return <p>Loading…</p>;
+    return <p role="status">Loading…</p>;
   }
 
   return (
@@ -156,6 +180,15 @@ export function App({ store }: AppProps): JSX.Element {
 
       {savedMessage !== undefined ? <p>{savedMessage}</p> : null}
       <IssueList issues={issues} />
+      {catalogWarning.length > 0 ? (
+        <div role="status" className="trivy-warning trivy-catalog-warning">
+          {catalogWarning.map((issue) => (
+            <div key={`${issue.field}:${issue.message}`}>
+              <strong>Warning:</strong> {issue.message}
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       {tab === 'runners' ? (
         editing !== undefined ? (

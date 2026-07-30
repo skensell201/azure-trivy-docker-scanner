@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../App';
 import { SettingsConflictError } from '../settingsStore';
@@ -54,7 +54,9 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: /add runner/i }));
     await userEvent.type(screen.getByLabelText(/alias/i), 'hardened');
     await userEvent.type(screen.getByLabelText(/image/i), 'reg.corp/trivy-fips:0.58.1');
-    await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
     await waitFor(() => expect(store.saveRunners).toHaveBeenCalled());
     expect(store.savedRunners[0].map((runner) => runner.alias)).toEqual(['baseline', 'hardened']);
   });
@@ -77,7 +79,9 @@ describe('App', () => {
     store.failNextSave = new SettingsConflictError('Another administrator changed these settings.');
     render(<App store={store} />);
     await screen.findByText('baseline');
-    await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    });
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/another administrator/i));
   });
 
@@ -95,7 +99,44 @@ describe('App', () => {
     const store = new FakeStore();
     render(<App store={store} />);
     await screen.findByText('baseline');
-    await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    });
     await waitFor(() => expect(screen.getByText(/saved/i)).toBeTruthy());
+  });
+
+  it('deletes the sole runner and warns about the catalog it leaves behind, without blocking the write', async () => {
+    const store = new FakeStore();
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[0]);
+    });
+    // The write happens unconditionally: an administrator emptying the catalog cannot be
+    // trapped by the same rule that blocks an invalid add or edit.
+    await waitFor(() => expect(store.saveRunners).toHaveBeenCalledWith([]));
+    // The resulting catalog has no default runner, which validateCatalog would reject on the
+    // next add/edit - reported as a warning, not the blocking alert used for add/edit failures.
+    expect(await screen.findByText(/exactly one/i)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('deletes one of several runners with no warning, since the remaining catalog is still valid', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
+      { alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: true },
+    ];
+    render(<App store={store} />);
+    await screen.findByText('legacy');
+    await act(async () => {
+      await userEvent.click(screen.getAllByRole('button', { name: /delete/i })[1]);
+    });
+    await waitFor(() =>
+      expect(store.saveRunners).toHaveBeenCalledWith([store.runners[0]]),
+    );
+    expect(await screen.findByText(/saved/i)).toBeTruthy();
+    expect(screen.queryByText(/exactly one/i)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
