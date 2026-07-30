@@ -871,32 +871,70 @@ describe('runScan', () => {
       expect(runner.calls[0].args[1]).toBe('docker.io');
     });
 
-    it('does not attempt the version probe or the scan when the login fails, naming the host and the runner alias', async () => {
+    // A real installation disproved the old premise: the registry can permit anonymous
+    // pulls while still rejecting `docker login` for an unrelated reason (e.g. a Nexus
+    // instance that has not enabled its Docker Bearer Token Realm, so login can never
+    // succeed there regardless of credentials). Aborting the whole scan over a failed
+    // login therefore refused work that would have succeeded. A failed login is now a
+    // warning, not a fatal error: the version probe and the scan still run exactly as if
+    // no credentials had been configured, and if the pull genuinely cannot happen, the
+    // scan's own docker failure reports that (see the docker-exit-code tests above).
+    it('warns naming the host and the runner alias when the login fails, but still probes the version and runs the scan', async () => {
       const runner = new FakeRunner(writeReport);
       runner.loginResults = [
         { exitCode: 1, stdout: '', stderr: 'unauthorized: authentication required', timedOut: false },
       ];
 
-      let error: Error | undefined;
-      try {
-        await runScan({
-          defaults,
-          runners: runnersWithCreds,
-          inputs,
-          agent,
-          scanIndex: 0,
-          processRunner: runner,
-          publisher: new Publisher((line) => lines.push(line)),
-          credentials: {},
-        });
-      } catch (e) {
-        error = e as Error;
-      }
+      const result = await runScan({
+        defaults,
+        runners: runnersWithCreds,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
 
-      expect(error?.message).toMatch(/registry\.example\.com/);
-      expect(error?.message).toMatch(/baseline/);
-      expect(runner.calls).toHaveLength(1);
-      expect(runner.calls.some((call) => call.args.includes('version'))).toBe(false);
+      expect(runner.calls[0].args).toContain('login');
+      expect(runner.calls.some((call) => call.args.includes('version'))).toBe(true);
+      expect(runner.calls.some((call) => call.args.includes('image'))).toBe(true);
+      expect(result.gate.outcome).toBe('failed');
+
+      expect(
+        lines.some(
+          (line) =>
+            line.includes('type=warning') &&
+            line.includes('registry.example.com') &&
+            line.includes('baseline') &&
+            /unauthorized/i.test(line),
+        ),
+      ).toBe(true);
+    });
+
+    // Pins the ordering for the success path specifically (as opposed to the general
+    // "logs in ... before probing the version" test above, which already covers this):
+    // a successful login must still happen, and still happen first, so a private
+    // registry that does require auth keeps working exactly as before.
+    it('still logs in before the version probe when the login succeeds', async () => {
+      const runner = new FakeRunner(writeReport);
+      runner.loginResults = [{ exitCode: 0, stdout: '', stderr: '', timedOut: false }];
+
+      await runScan({
+        defaults,
+        runners: runnersWithCreds,
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      expect(runner.calls[0].args).toContain('login');
+      expect(runner.calls[1].args).toContain('version');
+      expect(runner.calls[2].args).toContain('image');
+      expect(lines.some((line) => line.includes('type=warning'))).toBe(false);
     });
   });
 

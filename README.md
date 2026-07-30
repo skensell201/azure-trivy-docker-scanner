@@ -114,6 +114,12 @@ extension-data read access to this collection (the same access that lets someone
 back with the `curl` command above). Grant that access accordingly, and prefer a scoped
 service/robot account over a personal one for `registryUsername`.
 
+These fields are only needed when the registry actually requires authentication; if it
+allows anonymous pulls, leave both empty. A failed login no longer aborts the scan — it
+is logged as a warning and the task proceeds to pull the image and scan anyway, since
+some registries reject `docker login` for reasons unrelated to whether an anonymous pull
+will succeed.
+
 #### `defaults` — severity, gate and database defaults
 
 ```bash

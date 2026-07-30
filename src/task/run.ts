@@ -102,10 +102,21 @@ function dbDownloadFailureMessage(
  * private registry that requires auth would otherwise fail the pull with a confusing
  * `docker exited with code 125` rather than this named failure. The password reaches
  * docker only through `RunOptions.stdin` (`--password-stdin`), never through argv.
+ *
+ * A failed login only warns; it does not abort the scan. A live installation disproved
+ * the premise that used to justify treating this as fatal ("the pull would fail with a
+ * worse message anyway"): a registry can permit anonymous pulls while still rejecting
+ * `docker login` for a reason that has nothing to do with whether the pull will work
+ * (e.g. a Nexus registry that has not enabled its Docker Bearer Token Realm, where login
+ * cannot succeed with any credentials, yet a plain anonymous `docker pull` works fine).
+ * So the scan proceeds exactly as if no credentials had been configured; if the pull
+ * genuinely cannot happen, the scan's own docker-exit-code handling below reports that
+ * with its own specific message, and this function must not pre-empt it.
  */
 async function loginToRunnerRegistry(
   config: ResolvedScanConfig,
   processRunner: ProcessRunner,
+  publisher: Publisher,
 ): Promise<void> {
   const { registryUsername: username, registryPassword: password } = config.runner;
   if (!username || !password) {
@@ -118,10 +129,11 @@ async function loginToRunnerRegistry(
   });
 
   if (result.exitCode !== 0) {
-    throw new ScanExecutionError(
+    publisher.warn(
       `docker login to registry "${host}" failed for runner "${config.runner.alias}": ` +
         `${result.stderr.trim() || result.stdout.trim() || `exit code ${result.exitCode}`}. ` +
-        'The scan was not attempted, since the image pull would fail with a worse message anyway.',
+        'Continuing without it: the scan will still be attempted, and the image pull may ' +
+        'still succeed if the registry allows anonymous access.',
     );
   }
 }
@@ -212,9 +224,11 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   // Before the version probe and the scan below, both of which pull the runner image: a
   // private registry that needs auth would otherwise fail the pull with an opaque
   // "docker exited with code 125" instead of this named failure. loginToRunnerRegistry
-  // itself throws (aborting the scan) when the runner carries credentials but the login
-  // fails; it is a no-op when the runner carries none.
-  await loginToRunnerRegistry(config, processRunner);
+  // only warns (never throws) when the runner carries credentials but the login fails --
+  // the scan still proceeds, since a registry can allow anonymous pulls even though
+  // login itself fails for an unrelated reason. It is a no-op when the runner carries
+  // no credentials at all.
+  await loginToRunnerRegistry(config, processRunner, publisher);
 
   // Resolved once, before the version probe, since the message dbDownloadFailureMessage
   // builds below (on the scan path) and the env file (also below) both need the same
