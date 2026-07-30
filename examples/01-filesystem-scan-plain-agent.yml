@@ -5,9 +5,11 @@
 #     PATH and permission to talk to the local docker daemon (the agent user is in
 #     the "docker" group, or docker is otherwise configured for the agent user).
 #   - The collection has already been configured once, in Collection Settings >
-#     Trivy Scanner: at least one enabled runner (with one marked as default) and a
-#     dbRepository pointing at an internal Trivy DB mirror (build agents have no
-#     internet access to reach the public one).
+#     Trivy Scanner: at least one enabled runner (with one marked as default)
+#     linked, on the Runners tab, to a database entry from the Databases tab that
+#     points at an internal Trivy DB mirror (build agents have no internet access
+#     to reach the public one) -- or, for a collection not yet migrated to the
+#     catalogue, the deprecated dbRepository default on the Defaults tab.
 #
 # Produces:
 #   - A filesystem scan of the checked-out repository, using every collection

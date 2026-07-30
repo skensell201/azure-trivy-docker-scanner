@@ -13,11 +13,13 @@
 #   - A vulnerability scan of the named image, pulled directly from the registry by
 #     trivy itself (inside the scan container) using the service connection's
 #     credentials. Those credentials reach trivy as TRIVY_USERNAME/TRIVY_PASSWORD --
-#     the same two environment variables the database-mirror credentials
-#     (dbRegistryUsername/dbRegistryPassword in the collection's Defaults tab) would
-#     otherwise use. If both are configured, the target image's credentials win for
-#     this scan and the database-mirror credentials are dropped with a warning; see
-#     the README section on the "defaults" settings document.
+#     the same two environment variables the resolved database's own credentials
+#     would otherwise use (the linked "databases" catalogue entry's
+#     registryUsername/registryPassword, or, for a runner with no database linked,
+#     the deprecated dbRegistryUsername/dbRegistryPassword on the "defaults"
+#     document). If both are configured, the target image's credentials win for
+#     this scan and the database's credentials are dropped with a warning; see the
+#     README sections on the "databases" and "defaults" settings documents.
 
 trigger: none
 

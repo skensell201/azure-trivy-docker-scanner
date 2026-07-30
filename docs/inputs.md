@@ -46,6 +46,35 @@ Fields outside `OverridableField` (`scanType`, `target`, `formats`, `generateSbo
 `targetRegistryConnection`, `configConnection`) are never subject to this check at
 all: a pipeline's value for them always applies, with no Policy-tab involvement.
 
+## Where the vulnerability database comes from
+
+The vulnerability database is not a task input, and not part of the precedence
+chain above — no pipeline can name one directly, only indirectly via `runner`.
+Its own resolution (`ConfigResolver.ts`'s `resolveDatabase`) is a two-step
+fallback, tried for whichever runner `runner` above resolves to:
+
+1. **The runner's linked database.** If the selected runner names a `database`
+   (`RunnerConfig.database`, an alias into the collection's `databases`
+   catalogue — Collection Settings > Trivy Scanner > Databases), that entry's
+   `repository`/`javaRepository`/`registryUsername`/`registryPassword` are used.
+   This is the only path a configuration created after the catalogue existed
+   should use.
+2. **The collection's deprecated `defaults` fields**, `dbRepository`/
+   `javaDbRepository`/`dbRegistryUsername`/`dbRegistryPassword`, used only when
+   the selected runner has no `database` linked at all. Every scan that takes
+   this fallback logs a warning naming the runner, so an administrator can see
+   which runners still need migrating (see the README's "Migrating to the
+   database catalogue" section). If the runner has no `database` and `defaults`
+   has no `dbRepository` either, the build fails with a `DatabaseNotFoundError`
+   naming the runner and pointing at the admin hub.
+
+A database belongs to the runner that uses it, not to the collection as a
+whole, because a runner backed by a custom trivy image may ship with, and
+expect, its own database instead of the official one — this is why there is no
+"built-in default" step here the way there is for `severities` or `failOn`
+above: an unconfigured collection has no database at all, by design, and must
+fail loudly rather than guess at one.
+
 ## Which inputs are policy-gated, and why
 
 **Gated** (member of `OverridableField`, subject to the Policy tab):
@@ -203,6 +232,10 @@ Gated: if the Policy tab does not permit `runner` and a pipeline names one anywa
 the build fails and the error reports which runner the collection would have used
 instead.
 
+The selected runner also decides which vulnerability database is used — there is
+no separate task input for it. See "Where the vulnerability database comes from"
+below.
+
 ### `severities`
 
 Optional. Comma-separated list of `LOW`, `MEDIUM`, `HIGH`, `CRITICAL`, `UNKNOWN`
@@ -343,10 +376,13 @@ evaluated; it changes nothing about the scan, the gate, or which findings exist.
 Optional. The name of a Docker Registry service connection whose credentials
 trivy uses to pull the scanned image (for `scanType: image`) from a private
 registry. Reaches trivy as `TRIVY_USERNAME`/`TRIVY_PASSWORD` — the same two
-environment variables the database-mirror credentials
-(`dbRegistryUsername`/`dbRegistryPassword`) would otherwise use; if both are
-configured, this input's credentials win for the scan and the database-mirror
-credentials are dropped with a warning (see the README).
+environment variables the resolved database's own credentials would otherwise
+use (the linked `databases` catalogue entry's `registryUsername`/
+`registryPassword`, or, for a runner with no database linked, the deprecated
+`dbRegistryUsername`/`dbRegistryPassword` on `defaults` — see "Where the
+database comes from" above); if both are configured, this input's credentials
+win for the scan and the database's credentials are dropped with a warning
+(see the README).
 
 Omitted: no registry credentials are supplied; the pull is attempted anonymously.
 
@@ -357,10 +393,10 @@ source gives no further explicit rationale for exempting it.
 ### `configConnection`
 
 Optional. The name of a Generic service connection whose token (a PAT with
-extension-data scope) the task uses to read the collection's `runners`/`defaults`
-settings documents, instead of the build job's own OAuth token
-(`System.AccessToken`). Only needed if that OAuth token is not authorized to read
-extension data on this on-premises server.
+extension-data scope) the task uses to read the collection's `runners`/
+`defaults`/`databases` settings documents, instead of the build job's own OAuth
+token (`System.AccessToken`). Only needed if that OAuth token is not authorized
+to read extension data on this on-premises server.
 
 Omitted: the job's own `System.AccessToken` is used.
 

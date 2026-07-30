@@ -1,0 +1,45 @@
+# Two runners in the same collection, each backed by its own vulnerability database --
+# a scenario only expressible since the database became a per-runner catalogue entry
+# (0.5.0) rather than a single collection-wide setting. Before that, every runner
+# shared the one dbRepository on the Defaults tab, so a custom trivy image that shipped
+# expecting a different database could not be onboarded without changing what every
+# other runner used too.
+#
+# Assumes:
+#   - Same agent prerequisites as 01-filesystem-scan-plain-agent.yml.
+#   - The collection's Runners tab (Collection Settings > Trivy Scanner) has two
+#     enabled runners:
+#       "baseline"   -- the general-purpose trivy image, linked (Databases tab) to a
+#                        database entry "internal-mirror"
+#                        (registry.example.com/trivy-db:2).
+#       "java-heavy" -- a custom trivy image built in-house for Java-heavy services,
+#                        linked to its own database entry "java-mirror"
+#                        (repository registry.example.com/trivy-db-java:2,
+#                        javaRepository registry.example.com/trivy-java-db-extended:1)
+#                        that this custom image ships expecting.
+#
+# Produces:
+#   - Two scans in the same job, each pulling its vulnerability database from whatever
+#     its own runner's Databases-tab entry names, with no interaction between them --
+#     changing "java-heavy"'s linked database has no effect on what "baseline"
+#     downloads, and vice versa.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    displayName: Scan with the general-purpose runner and its database
+    inputs:
+      scanType: image
+      target: registry.example.com/app:1.4.2
+      runner: baseline
+
+  - task: TrivyScan@1
+    displayName: Scan with the java-heavy runner and its own database
+    inputs:
+      scanType: image
+      target: registry.example.com/java-app:2.1.0
+      runner: java-heavy

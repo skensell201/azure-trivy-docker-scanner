@@ -30,9 +30,10 @@ Windows agents are not supported in v1.
 The [`examples`](examples) directory has one complete pipeline per scenario — a plain
 Linux agent, a Kubernetes agent reaching docker through a mounted socket
 (`sourceTransfer: copy`), scanning a locally built image vs. one in a private
-registry, IaC scanning, publishing to the Tests tab, SARIF/SBOM artifacts, and the
-internal-CA registry stopgap. Each file starts with a comment explaining what it
-assumes and what it produces; copy one wholesale as a starting point.
+registry, IaC scanning, publishing to the Tests tab, SARIF/SBOM artifacts, the
+internal-CA registry stopgap, and two runners each backed by its own vulnerability
+database. Each file starts with a comment explaining what it assumes and what it
+produces; copy one wholesale as a starting point.
 
 ## Task inputs
 
@@ -43,37 +44,53 @@ defaults, the collection's Defaults tab, and pipeline inputs.
 
 ## Configuration
 
-Administration is collection-wide, not per-project: there is one runner catalog and one set of
-severity/gate defaults for the whole Azure DevOps collection, and every project's pipelines
-consume the same catalog and defaults. There is no per-project configuration.
+Administration is collection-wide, not per-project: there is one runner catalog, one vulnerability
+database catalogue, and one set of severity/gate defaults for the whole Azure DevOps collection,
+and every project's pipelines consume the same catalog, catalogue and defaults. There is no
+per-project configuration. A database is a property of the runner that uses it rather than a
+single collection-wide value, since a runner backed by a custom trivy image may ship with, and
+expect, its own database — but the catalogue it is chosen from is still collection-wide.
 
 ### Admin hub (Collection Settings > Trivy Scanner)
 
 The primary way to configure the collection-wide settings is the **Trivy Scanner** hub: open
 **Collection Settings** (the gear icon, top right of any project) and pick **Trivy Scanner** from
-the left-hand navigation. The hub has three tabs, each backed by the same validation rules the
+the left-hand navigation. The hub has four tabs, each backed by the same validation rules the
 task itself applies (`src/shared/validation.ts`), so a setting that would fail in the pipeline is
 rejected in the form instead:
 
 - **Runners** — the runner catalog: add, edit, enable/disable and delete entries. Each runner has
   an `alias`, an `image` (with an explicit tag or a digest, never `latest`), optional
   `displayName`/`description`/`extraDockerArgs`, an `isDefault` flag (exactly one enabled runner
-  must be default), an `enabled` flag, and an optional `registryUsername`/`registryPassword` pair
-  for pulling the image from a private registry.
-- **Defaults** — the `defaults` document: `dbRepository` (the only required field, since agents
-  have no internet access), plus `severities`, `scanners`, `failOn`, `timeoutMinutes`,
-  `ignoreUnfixed`, `skipDbUpdate`, `javaDbRepository`, `cacheDir`, and
-  `dbRegistryUsername`/`dbRegistryPassword` for the database-mirror registry.
+  must be default), an `enabled` flag, an optional `registryUsername`/`registryPassword` pair
+  for pulling the image from a private registry, and a `database` — the alias of one entry from
+  the Databases tab below, chosen from a select rather than typed. A runner with no database
+  linked falls back to the deprecated fields on the Defaults tab (see below).
+- **Databases** — the vulnerability-database catalogue (the `databases` document): one or more
+  named entries, each with an `alias`, a `repository`, an optional `javaRepository`, an optional
+  `registryUsername`/`registryPassword` pair, and optional `displayName`/`description`. A database
+  is a property of the runner that uses it rather than a single collection-wide setting, because a
+  runner backed by a custom trivy image may ship with, and expect, its own vulnerability database
+  instead of the official one. Deleting a database that a runner still points at is refused, and
+  the error names the runner.
+- **Defaults** — the `defaults` document: `severities`, `scanners`, `failOn`, `timeoutMinutes`,
+  `ignoreUnfixed`, `skipDbUpdate`, `cacheDir`. It also still *stores* the pre-catalogue database
+  fields (`dbRepository`, `javaDbRepository`, `dbRegistryUsername`, `dbRegistryPassword`) for any
+  runner that has not been linked to a catalogue entry yet, but the form no longer shows them —
+  they are carried through unchanged on every save of this tab, precisely so that saving an
+  unrelated default (say, a new `timeoutMinutes`) can never wipe out the fallback a not-yet-migrated
+  runner's scans currently depend on. See "Migrating to the database catalogue" below.
 - **Policy** — `allowOverrides`: a checkbox per overridable pipeline input
   (`src/shared/types.ts`'s `OverridableField`). Leaving a box unchecked means a pipeline's own
   input for that field is rejected and the collection's default is enforced instead.
 
-The runner and database-mirror password fields never display a saved value: once a password is
+The runner and database password fields never display a saved value: once a password is
 set, the field shows "a password is stored" and a **Replace password** button instead of the
 value itself, so opening the form cannot leak the credential and saving it back without touching
 that field cannot blank it out. The form also repeats, next to the field, the same warning given
 below: **the password is stored in clear text** in the extension settings document and is
-readable by anyone with extension-data read access to this collection.
+readable by anyone with extension-data read access to this collection — this applies equally to
+the runner catalog's credentials and to every catalogued database's credentials.
 
 Saves are read-modify-write against the document's `__etag`: if another administrator saved
 between your load and your save, the hub tells you someone else changed the settings instead of
@@ -92,9 +109,50 @@ go to **Organization/Collection Settings > Extensions**, find **Trivy Docker Sca
 the permission prompt shown there (Azure DevOps Server surfaces this as a banner or an "Update"
 action on the extension's row); then reload the hub page.
 
+#### Migrating to the database catalogue (0.5.0)
+
+Before `0.5.0`, the vulnerability database was one collection-wide setting on the Defaults tab
+(`dbRepository`/`javaDbRepository`/`dbRegistryUsername`/`dbRegistryPassword`). Starting with
+`0.5.0` it is a catalogue, on its own **Databases** tab, because a database belongs to the runner
+that uses it, not to the collection: a runner backed by a custom trivy image may ship with, and
+expect, its own database rather than the official one.
+
+**Nothing breaks on upgrade, and nothing needs to happen immediately.** The four fields on the
+Defaults tab still exist in the `defaults` document and are still honoured — a runner with no
+`database` linked keeps using them exactly as before. The Defaults form itself no longer shows
+these fields, but saving it (for any unrelated change, such as a new `timeoutMinutes`) carries
+their stored values through untouched, so routine administration cannot silently erase the
+fallback current scans depend on.
+
+To migrate a collection:
+
+1. Open **Collection Settings > Trivy Scanner > Databases** and add an entry — an `alias`, the
+   database `repository` (and, if you scan Java artifacts, `javaRepository`), and credentials if
+   the mirror needs them. This is the same value that used to live in `dbRepository` on the
+   Defaults tab.
+2. Open **Collection Settings > Trivy Scanner > Runners**, edit each runner, and pick that entry
+   from the new **Database** select (it replaces free-text typing with a choice from the
+   catalogue you just created).
+3. Once every runner names a database, the deprecated Defaults fields are no longer read by
+   anything and can be left blank or cleared.
+
+**What the build-log warning means.** Until a runner is migrated, every scan that runner performs
+logs a warning of the shape:
+
+```
+Runner "baseline" has no database linked, so this scan used the collection's deprecated
+dbRepository/javaDbRepository (and dbRegistryUsername/dbRegistryPassword, if set) defaults
+instead. Link a database to this runner in the admin hub (Collection Settings > Trivy Scanner >
+Runners) before those deprecated fields are removed.
+```
+
+This is not an error — the scan still ran, using the deprecated fallback — it is a per-run,
+per-runner reminder naming exactly which runner in step 2 above still needs a database linked.
+Once every runner names one, the warning stops appearing.
+
 ### Configuring via the REST API (alternative, for scripting)
 
-The hub covers everything an administrator needs interactively. The same two settings documents
+The hub covers everything an administrator needs interactively. The same three settings documents
 can still be read and written directly through the Azure DevOps Extension Data REST API — this
 keeps working after `0.2.0` and remains useful for scripted or bulk changes, but it is no longer
 the primary path.
@@ -114,14 +172,23 @@ export PUB="iksoftware"; export EXT="trivy-docker-scanner"
 curl -sS -u ":$PAT" -X PUT \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents?api-version=3.2-preview.1" \
   -H 'Content-Type: application/json' \
-  -d '{"id":"runners","__etag":-1,"value":[{"alias":"baseline","image":"registry.example.com/trivy:0.58.1","isDefault":true,"enabled":true,"registryUsername":"svc-trivy","registryPassword":"<password>"}]}'
+  -d '{"id":"runners","__etag":-1,"value":[{"alias":"baseline","image":"registry.example.com/trivy:0.58.1","isDefault":true,"enabled":true,"database":"internal-mirror","registryUsername":"svc-trivy","registryPassword":"<password>"}]}'
 ```
+
+`database` names an entry from the `databases` catalogue below by `alias` (here, `internal-mirror`)
+— this is how a runner picks which vulnerability database it uses. It is optional only for
+compatibility with a settings document written before the catalogue existed: a runner with no
+`database` set falls back to the deprecated `dbRepository`/`javaDbRepository`/
+`dbRegistryUsername`/`dbRegistryPassword` fields on the `defaults` document instead (see
+"Migrating to the database catalogue" above), and every scan that runner performs logs a warning
+saying so. A new runner should always set `database` explicitly.
 
 Validation rules (`src/shared/validation.ts`): `alias` must be lowercase letters, digits and
 dashes, 2-31 characters; `image` needs an explicit tag other than `latest`, or a `@sha256:...`
 digest; the catalog must contain exactly one runner with `isDefault: true` that is not disabled
 (`enabled: false`); `registryUsername` and `registryPassword` are optional but must be set
-together — one without the other fails validation.
+together — one without the other fails validation; `database`, if set, must name an alias that
+actually exists in the `databases` catalogue.
 
 If a runner carries `registryUsername`/`registryPassword`, the task runs
 `docker login <host> --username <user> --password-stdin` for the registry that hosts its image
@@ -138,34 +205,65 @@ is logged as a warning and the task proceeds to pull the image and scan anyway, 
 some registries reject `docker login` for reasons unrelated to whether an anonymous pull
 will succeed.
 
-#### `defaults` — severity, gate and database defaults
+#### `databases` — the vulnerability-database catalogue
 
 ```bash
 curl -sS -u ":$PAT" -X PUT \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents?api-version=3.2-preview.1" \
   -H 'Content-Type: application/json' \
-  -d '{"id":"defaults","__etag":-1,"value":{"dbRepository":"registry.example.com/trivy-db:2","dbRegistryUsername":"svc-trivy-db","dbRegistryPassword":"<password>"}}'
+  -d '{"id":"databases","__etag":-1,"value":[{"alias":"internal-mirror","repository":"registry.example.com/trivy-db:2","javaRepository":"registry.example.com/trivy-java-db:1","registryUsername":"svc-trivy-db","registryPassword":"<password>"}]}'
 ```
 
-`dbRepository` (the OCI reference of the internal vulnerability-database mirror) is the only
-required field, since build agents have no internet access. Everything else — `severities`,
-`scanners`, `failOn`, `timeoutMinutes`, `allowOverrides`, `dbRegistryUsername`,
-`dbRegistryPassword`, ... — is optional and falls back to the task's built-in defaults when
-omitted (see `src/shared/types.ts` for the full shape). `dbRegistryUsername` and
-`dbRegistryPassword` are optional but must be set together, same as the runner catalog's
-credential pair above, and carry the **same plain-text-storage caveat**: anyone with
-extension-data read access to this collection can read this password back.
+This document is a list of database entries, the same shape as `runners` above, each one a named,
+reusable vulnerability database that one or more runners can point at by `alias`
+(`runners[].database`, see above). A database is a property of the runner that uses it, not a
+collection-wide setting — a runner backed by a custom trivy image may ship with, and expect, its
+own database rather than the official one. There is no "default database": a runner either names
+one explicitly, or falls back to the deprecated fields on `defaults` (see the next section and
+"Migrating to the database catalogue" above).
 
-Trivy pulls its database from *inside* the container, so these credentials reach it through
-`TRIVY_USERNAME`/`TRIVY_PASSWORD` in the container's environment — the same two variables the
-task already uses for the scanned image's own registry credentials
+Validation rules (`src/shared/validation.ts`): `alias` follows the same shape rule as a runner
+alias; `repository` needs an explicit tag other than `latest`, or a `@sha256:...` digest, same as
+a runner's `image`; `javaRepository`, if set, is held to the same rule; `registryUsername` and
+`registryPassword` are optional but must be set together, same as the runner catalog's pair.
+Deleting an entry that a runner still points at is refused — the error names the runner, so an
+administrator can re-link or remove it there first.
+
+Trivy pulls its database from *inside* the container, so a database entry's credentials reach it
+through `TRIVY_USERNAME`/`TRIVY_PASSWORD` in the container's environment — the same two variables
+the task already uses for the scanned image's own registry credentials
 (`targetRegistryConnection`, a per-pipeline task input). Trivy has no second pair of variables,
 and this task does not attempt per-registry credential mapping. If a pipeline sets
-`targetRegistryConnection` credentials, they win and `dbRegistryUsername`/`dbRegistryPassword`
-are ignored for that run, with a warning explaining why; otherwise the database-mirror
-credentials are used.
+`targetRegistryConnection` credentials, they win and the database's credentials are ignored for
+that run, with a warning explaining why; otherwise the database's own credentials are used. **The
+password is stored in plain text in this settings document**, same caveat as the runner catalog's
+`registryPassword` above.
 
-Read either document back to confirm it saved:
+#### `defaults` — severity and gate defaults (plus a deprecated database fallback)
+
+```bash
+curl -sS -u ":$PAT" -X PUT \
+  "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents?api-version=3.2-preview.1" \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"defaults","__etag":-1,"value":{"severities":["HIGH","CRITICAL"],"failOn":"CRITICAL"}}'
+```
+
+Every field is optional and falls back to the task's built-in defaults when omitted:
+`severities`, `scanners`, `failOn`, `timeoutMinutes`, `ignoreUnfixed`, `skipDbUpdate`, `cacheDir`,
+`allowOverrides` (see `src/shared/types.ts` for the full shape). A fully migrated configuration
+has no database settings in this document at all — that belongs in the `databases` catalogue
+above, linked to a runner by alias.
+
+This document also still carries four **deprecated** fields from before the catalogue existed:
+`dbRepository`, `javaDbRepository`, `dbRegistryUsername`, `dbRegistryPassword`. They are honoured
+as the fallback for any runner with no `database` linked (and every scan that falls back logs a
+warning naming that runner — see "Migrating to the database catalogue" above), but a new
+configuration should not set them; use the `databases` document instead. `dbRegistryUsername` and
+`dbRegistryPassword` are optional but must be set together, same as every other credential pair
+here, and carry the **same plain-text-storage caveat**. If you are writing this document by hand
+for a collection that predates `0.5.0`, these four fields still work exactly as before.
+
+Read any of the three documents back to confirm it saved:
 
 ```bash
 curl -sS -u ":$PAT" \

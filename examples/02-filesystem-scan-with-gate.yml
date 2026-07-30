@@ -3,7 +3,7 @@
 # collection's Defaults tab currently holds.
 #
 # Assumes:
-#   - Same agent/runner/dbRepository prerequisites as
+#   - Same agent/runner/database prerequisites as
 #     01-filesystem-scan-plain-agent.yml.
 #   - The collection's Policy tab (Collection Settings > Trivy Scanner > Policy)
 #     permits pipelines to set "severities" and "failOn". Both are allowed by
