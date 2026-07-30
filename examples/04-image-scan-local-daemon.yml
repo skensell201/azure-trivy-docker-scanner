@@ -1,0 +1,37 @@
+# Building a docker image earlier in the same job, then scanning it directly from
+# the local docker daemon's image store -- no registry push or pull involved.
+#
+# Assumes:
+#   - Same agent prerequisites as 01-filesystem-scan-plain-agent.yml.
+#   - An earlier step in this job builds the image with a normal `docker build` (or
+#     the built-in Docker@2 task), tagging it exactly the way "target" below names
+#     it.
+#
+# Why useDockerSocket: true:
+#   Trivy itself runs inside this task's own runner container, not directly on the
+#   agent host, so by default it has no way to see an image that exists only in the
+#   agent's docker daemon's local store -- it would try (and fail) to pull "target"
+#   from a registry instead. Mounting /var/run/docker.sock into the scan container
+#   gives the trivy process inside it a direct line to that same daemon, so it can
+#   resolve "target" as the image just built. This is unrelated to sourceTransfer:
+#   it neither affects, nor is affected by, whether the sources directory is
+#   mounted or copied -- an image scan never mounts sourcesDir at all.
+#
+# Produces:
+#   - A vulnerability scan of the image this job just built, gated on the
+#     collection's defaults, without the image ever being pushed anywhere.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - script: docker build -t local/app:$(Build.BuildId) .
+    displayName: Build the image to scan
+
+  - task: TrivyScan@1
+    inputs:
+      scanType: image
+      target: local/app:$(Build.BuildId)
+      useDockerSocket: true

@@ -1,0 +1,28 @@
+# Plain Linux build agent with docker installed on the same host.
+#
+# Assumes:
+#   - The agent pool "Default" has at least one Linux agent with the docker CLI on
+#     PATH and permission to talk to the local docker daemon (the agent user is in
+#     the "docker" group, or docker is otherwise configured for the agent user).
+#   - The collection has already been configured once, in Collection Settings >
+#     Trivy Scanner: at least one enabled runner (with one marked as default) and a
+#     dbRepository pointing at an internal Trivy DB mirror (build agents have no
+#     internet access to reach the public one).
+#
+# Produces:
+#   - A filesystem scan of the checked-out repository, using every collection
+#     default (runner, severities, scanners, failOn, timeoutMinutes, ...) with no
+#     pipeline overrides at all -- this is the simplest possible use of the task.
+#   - The build fails if the collection's failOn threshold (CRITICAL by default,
+#     unless an administrator changed it in the Defaults tab) is met or exceeded.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: filesystem
+      target: '.'

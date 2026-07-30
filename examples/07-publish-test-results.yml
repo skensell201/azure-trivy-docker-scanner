@@ -1,0 +1,34 @@
+# Publishing every finding as a JUnit test result, in addition to the build log
+# table, the JSON report attachment, and the TrivyReports build artifact.
+#
+# Assumes:
+#   - Same agent prerequisites as 01-filesystem-scan-plain-agent.yml.
+#
+# The caveat that matters before turning this on:
+#   Every finding becomes its own *failed* <testcase> in the Tests tab -- that is
+#   the point (a row per finding, "Failing since" dates, New vs. Existing tracking,
+#   filtering), not a bug. A build whose gate passes (findings all below failOn, or
+#   failOn: none) will still show red in the Tests tab once this is on: the gate and
+#   the Tests tab answer different questions ("should the build fail" vs. "what
+#   needs attention, with history"), and a build can legitimately be green while its
+#   tests are red. That is exactly why publishTestResults defaults to false --
+#   switch it on only for a team that has deliberately decided it wants this view.
+#
+# Produces:
+#   - A normal gated scan, plus a JUnit test run ("Trivy - <artifact name>") visible
+#     on the build's Tests tab: one test case per finding, named "[SEVERITY] ID",
+#     grouped by finding kind (vulnerability/secret/misconfiguration/license) via
+#     its classname. A clean scan still publishes one run, with a single synthetic
+#     passing test case rather than an empty run.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: filesystem
+      target: '.'
+      publishTestResults: true

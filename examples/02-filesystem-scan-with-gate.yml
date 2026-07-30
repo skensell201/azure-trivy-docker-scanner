@@ -1,0 +1,37 @@
+# Same plain Linux agent as 01-filesystem-scan-plain-agent.yml, but pinning the
+# severity and gate policy in the pipeline itself instead of relying on whatever the
+# collection's Defaults tab currently holds.
+#
+# Assumes:
+#   - Same agent/runner/dbRepository prerequisites as
+#     01-filesystem-scan-plain-agent.yml.
+#   - The collection's Policy tab (Collection Settings > Trivy Scanner > Policy)
+#     permits pipelines to set "severities" and "failOn". Both are allowed by
+#     default (allowOverrides omitted on the "defaults" document means every
+#     overridable field may be set from a pipeline), but an administrator may have
+#     unchecked either box. If either is locked, this build fails immediately with
+#     an error naming the field and the value the collection enforces instead --
+#     it does not silently fall back to that value and continue.
+#
+# Produces:
+#   - A filesystem scan that only reports HIGH and CRITICAL findings ("severities"
+#     filters what trivy reports at all, not just what fails the build -- LOW,
+#     MEDIUM and UNKNOWN are dropped entirely) and fails the build on CRITICAL only.
+#   - If "severities"/"failOn" were omitted here, they would fall back first to the
+#     collection's Defaults tab (Collection Settings > Trivy Scanner > Defaults),
+#     and only if the administrator left those blank too, to this task's own
+#     built-in defaults: severities CRITICAL,HIGH and failOn CRITICAL
+#     (src/task/ConfigResolver.ts).
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: filesystem
+      target: '.'
+      severities: 'HIGH,CRITICAL'
+      failOn: 'CRITICAL'

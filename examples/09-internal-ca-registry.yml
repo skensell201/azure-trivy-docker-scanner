@@ -1,0 +1,50 @@
+# A registry (holding the image to scan, the vulnerability-database mirror, or
+# both) whose HTTPS certificate is issued by an internal CA that trivy -- running
+# inside the scan container -- does not trust by default.
+#
+# This is a different problem from the task's OWN HTTPS calls (reading the
+# "runners"/"defaults" settings documents), which run in Node on the agent host and
+# are covered separately in the README's "Internal certificate authorities"
+# section. Trivy's calls run as its own process inside the runner container and
+# make their own TLS connections to the registry -- they inherit none of the
+# agent's or the task's own trust configuration.
+#
+# The fix belongs in the runner's configuration, not in this pipeline:
+#   Mount the internal CA certificate into the runner image's own trust store via
+#   the runner's "Extra docker args" field, in Collection Settings > Trivy Scanner >
+#   Runners -- for example:
+#
+#     -v /etc/ssl/certs/internal-ca.pem:/etc/ssl/certs/internal-ca.pem:ro
+#
+#   (adjust the container-side path to wherever the runner image's own trust store
+#   expects extra CA files). That is a one-time, collection-wide fix, applied once
+#   by an administrator, that covers every pipeline using that runner -- not
+#   something any individual pipeline should have to work around on its own.
+#
+# The pipeline below shows the "--insecure" trivy flag ONLY as a labelled, temporary
+# stopgap for while the runner fix above is rolled out. It disables certificate
+# verification entirely for every trivy request in this run -- both the image pull
+# and the vulnerability-database pull -- so a scan "succeeding" this way proves
+# nothing about supply-chain integrity. Remove it the moment the runner's trust
+# store is fixed; do not leave it in a long-lived pipeline.
+#
+# Assumes:
+#   - Same agent prerequisites as 01-filesystem-scan-plain-agent.yml.
+#   - "extraTrivyArgs" is one of the fields the collection's Policy tab gates: if an
+#     administrator has not granted this pipeline permission to set it, the build
+#     fails naming the violation instead of silently running with the collection's
+#     own (presumably already-fixed) configuration.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: image
+      target: registry.example.com/app:1.4.2
+      # STOPGAP ONLY -- see the comment above. Remove once the runner's Extra
+      # docker args trust the internal CA.
+      extraTrivyArgs: '--insecure'

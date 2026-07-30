@@ -1,0 +1,55 @@
+# Agent running inside a container -- the usual Kubernetes agent-pool arrangement --
+# reaching a docker daemon through a mounted host socket (/var/run/docker.sock)
+# rather than a daemon that shares the agent's own filesystem.
+#
+# Assumes:
+#   - The agent container has docker on PATH and can reach a daemon through a
+#     mounted /var/run/docker.sock (either the host's own daemon, or a sidecar
+#     daemon container in the same pod).
+#   - That daemon does NOT share a filesystem with the agent container -- the
+#     normal case for this topology, since the daemon runs in a different mount
+#     namespace (the host, or a separate sidecar container) than the agent.
+#
+# Why sourceTransfer: copy:
+#   Filesystem/repository/config scans need the sources inside the scan container.
+#   The default transfer ("mount") does this with `docker run -v
+#   <sourcesDir>:/workspace`, but that bind mount is resolved by the DAEMON, not by
+#   this task -- so when the daemon cannot see the agent's own filesystem at the
+#   same absolute path, it does not fail the mount, it silently substitutes an
+#   empty directory, and the scan then fails confusingly ("Number of
+#   language-specific files num=0", or a report file the task cannot find
+#   afterwards). There is no way to fix that mismatch when the daemon and the
+#   agent are different containers by design -- a shared agent pool you do not
+#   administer, or a cluster where they will never share a filesystem.
+#   sourceTransfer: copy sidesteps the problem entirely: it never bind-mounts the
+#   sources, it streams them into the scan container with `docker cp` (over the
+#   docker API, the same way `docker save`/`docker load` would), so it needs no
+#   shared filesystem between the agent and the daemon at all.
+#
+# What it costs, on every scan, not just the first one after switching:
+#   - The sources are streamed into the scan container on every run. For a large
+#     repository this is measurably slower than a bind mount, which costs nothing
+#     per run to set up.
+#   - The vulnerability database cannot use this agent's local cache: cacheDir is
+#     itself a bind mount that the same daemon would have to resolve, so keeping it
+#     in copy mode would just reproduce the same silent-empty-mount failure this
+#     feature exists to avoid, only relocated to the cache. So in copy mode the
+#     cache mount is dropped, and trivy downloads the vulnerability database fresh
+#     on every scan.
+#
+# Produces:
+#   - A filesystem scan of the checked-out repository, gated on the collection's
+#     defaults, transferred into the scan container without ever assuming a shared
+#     filesystem between the agent and the docker daemon.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: filesystem
+      target: '.'
+      sourceTransfer: copy

@@ -21,7 +21,25 @@ Windows agents are not supported in v1.
 | `src/task` | Pipeline task `TrivyScan@1` |
 | `test/fixtures` | Real trivy output used by the parser tests |
 | `test/integration` | Scan run against a fake docker binary |
+| `examples` | Complete, runnable pipelines for common scenarios |
+| `docs/inputs.md` | Reference for every task input: types, defaults, precedence, policy gating |
 | `docs/superpowers` | Design spec and implementation plans |
+
+## Examples
+
+The [`examples`](examples) directory has one complete pipeline per scenario — a plain
+Linux agent, a Kubernetes agent reaching docker through a mounted socket
+(`sourceTransfer: copy`), scanning a locally built image vs. one in a private
+registry, IaC scanning, publishing to the Tests tab, SARIF/SBOM artifacts, and the
+internal-CA registry stopgap. Each file starts with a comment explaining what it
+assumes and what it produces; copy one wholesale as a starting point.
+
+## Task inputs
+
+Every input `TrivyScan@1` accepts — its type, accepted values, what happens when
+it is omitted, and whether the collection's Policy tab can lock it — is documented
+in [`docs/inputs.md`](docs/inputs.md), including the precedence between built-in
+defaults, the collection's Defaults tab, and pipeline inputs.
 
 ## Configuration
 

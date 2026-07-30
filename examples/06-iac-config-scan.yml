@@ -1,0 +1,27 @@
+# IaC misconfiguration scan of a directory (Terraform, Kubernetes manifests,
+# Dockerfiles, CloudFormation, ...) rather than a scan of installed packages.
+#
+# Assumes:
+#   - Same agent prerequisites as 01-filesystem-scan-plain-agent.yml.
+#   - The path named by "target" (infra/ below) exists relative to the checked-out
+#     sources and contains the IaC files to check.
+#
+# Produces:
+#   - A misconfiguration-only scan: scanType: config always runs trivy's
+#     misconfiguration scanner and no other -- `trivy config` has no --scanners
+#     flag at all, so the "scanners" input has no effect for this scan type even if
+#     set.
+#   - The same gate, output formats and publishing behavior as every other scan
+#     type: the build fails according to failOn exactly as it would for a
+#     vulnerability scan, using the same severity vocabulary.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: config
+      target: infra

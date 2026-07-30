@@ -1,0 +1,32 @@
+# Producing a SARIF report and a CycloneDX SBOM alongside the normal JSON report,
+# both published as their own build artifacts.
+#
+# Assumes:
+#   - Same agent prerequisites as 01-filesystem-scan-plain-agent.yml.
+#
+# Produces:
+#   - "formats: table,json,sarif" adds one extra trivy invocation against the same
+#     target that produces a SARIF file, uploaded to the CodeAnalysisLogs artifact
+#     (which existing SARIF viewer extensions already know how to render). The
+#     underlying JSON run -- the one the gate and the results-tab attachment depend
+#     on -- always happens regardless of what "formats" lists or omits; listing or
+#     omitting "json" here has no effect.
+#   - "generateSbom: cyclonedx" adds a second extra invocation that produces a
+#     CycloneDX SBOM, uploaded as the "TrivySBOM" artifact. Use spdx-json instead of
+#     cyclonedx if that is the format your downstream tooling expects.
+#   - Either extra run failing (a docker problem, a missing output file) only logs a
+#     warning -- it never fails the scan or the gate, both of which depend solely on
+#     the JSON report.
+
+trigger: none
+
+pool:
+  name: Default
+
+steps:
+  - task: TrivyScan@1
+    inputs:
+      scanType: filesystem
+      target: '.'
+      formats: 'table,json,sarif'
+      generateSbom: cyclonedx
