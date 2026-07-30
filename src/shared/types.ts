@@ -14,6 +14,16 @@ export type Scanner = 'vuln' | 'secret' | 'misconfig' | 'license';
 export type OutputFormat = 'table' | 'json' | 'sarif';
 export type SbomFormat = 'off' | 'cyclonedx' | 'spdx-json';
 export type FindingKind = 'vulnerability' | 'secret' | 'misconfiguration' | 'license';
+/**
+ * How the sources reach the scan container. 'mount' (default) bind-mounts sourcesDir with
+ * `docker run -v`, which the docker daemon resolves itself and therefore requires the
+ * daemon to share a filesystem with the agent. 'copy' instead streams the sources in and
+ * the report back out over the docker API (`docker cp`), so it works even when the agent
+ * runs in a container whose docker daemon is reached through a mounted socket and cannot
+ * see the agent's own filesystem at all. See DockerCommand.ts and run.ts for the mechanics
+ * and the costs (no cache mount, sources streamed on every scan).
+ */
+export type SourceTransfer = 'mount' | 'copy';
 
 export type SeverityCounts = Record<Severity, number>;
 export type KindCounts = Record<FindingKind, number>;
@@ -92,6 +102,15 @@ export interface TaskInputs {
   publishArtifact?: boolean;
   extraTrivyArgs?: string;
   workingDirectory?: string;
+  /**
+   * Not an `OverridableField`: it describes this agent's own topology (does its docker
+   * daemon share a filesystem with it?), not a security policy an administrator would
+   * ever want to lock a pipeline out of. Unlike weakening `severities` or `failOn`, there
+   * is no gate-integrity reason to restrict it centrally, and a collection can easily mix
+   * agent pools with different topologies -- so, like `formats` or `workingDirectory`, any
+   * pipeline may always set it directly.
+   */
+  sourceTransfer?: SourceTransfer;
 }
 
 /** The agent's runtime environment, known only once the task executes. */
@@ -127,6 +146,7 @@ export interface ResolvedScanConfig {
   buildId: string;
   /** Distinguishes several task instances in one job so their containers and report files do not collide. */
   scanIndex: number;
+  sourceTransfer: SourceTransfer;
 }
 
 export interface Finding {

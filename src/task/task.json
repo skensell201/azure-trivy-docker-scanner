@@ -14,7 +14,7 @@
   "version": {
     "Major": 1,
     "Minor": 0,
-    "Patch": 3
+    "Patch": 4
   },
   "instanceNameFormat": "Trivy scan $(target)",
   "groups": [
@@ -146,6 +146,18 @@
       "label": "Mount the docker socket",
       "required": false,
       "groupName": "advanced"
+    },
+    {
+      "name": "sourceTransfer",
+      "type": "pickList",
+      "label": "Source transfer",
+      "required": false,
+      "groupName": "advanced",
+      "helpMarkDown": "How the sources reach the scan container. Leave as Mount unless this agent's docker daemon cannot see the agent's own filesystem (e.g. a Kubernetes agent reached through a mounted host docker socket) -- see the README section on running the agent in a container.",
+      "options": {
+        "mount": "Mount (default; requires a shared filesystem with the docker daemon)",
+        "copy": "Copy (docker cp; no shared filesystem needed, but slower and skips the local database cache)"
+      }
     },
     {
       "name": "skipDbUpdate",

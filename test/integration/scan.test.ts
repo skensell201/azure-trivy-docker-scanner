@@ -190,4 +190,121 @@ describe('scan against a fake docker binary', () => {
     expect(fs.existsSync(path.join(workspace, '.trivy', 'report-0.sarif'))).toBe(true);
     expect(lines.some((line) => line.includes('CodeAnalysisLogs'))).toBe(true);
   });
+
+  // Exercises sourceTransfer: copy end to end through a real spawn, the same way the
+  // 'mount' tests above do -- this is precisely the case a fake ProcessRunner (run.test.ts)
+  // cannot catch: a disagreement between the argv DockerCommand builds for `create`/`cp`/
+  // `start`/`rm` and what a real process actually receives and can act on.
+  describe('sourceTransfer: copy', () => {
+    it('runs the create/cp/start/cp/rm sequence and turns the copied-out report into a gate result', async () => {
+      const lines: string[] = [];
+      const result = await runScan({
+        defaults: { dbRepository: 'registry.example.com/trivy-db:2', failOn: 'HIGH' },
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        inputs: { scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' },
+        agent: {
+          sourcesDir: workspace,
+          agentHomeDir: workspace,
+          tempDir: path.join(workspace, 'temp'),
+          buildId: '1042',
+        },
+        scanIndex: 0,
+        processRunner: new FakeDockerRunner(),
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      expect(result.gate.outcome).toBe('failed');
+      expect(result.report.findings[0].id).toBe('CVE-2024-21626');
+      expect(lines.some((line) => line.includes('task.addattachment'))).toBe(true);
+
+      // Two docker invocations happen before the scan container's own lifecycle: the
+      // version probe (docker run ... version) and nothing else, since login is not
+      // configured -- then the five-step create/cp/start/cp/rm sequence.
+      const calls = readCalls();
+      expect(calls).toHaveLength(6);
+      expect(calls[0]).toContain('version');
+      const subcommands = calls.slice(1).map((call) => call[0]);
+      expect(subcommands).toEqual(['create', 'cp', 'start', 'cp', 'rm']);
+    });
+
+    it('never mounts the sources directory or the cache directory into the scan container', async () => {
+      await runScan({
+        defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        inputs: { scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' },
+        agent: {
+          sourcesDir: workspace,
+          agentHomeDir: workspace,
+          tempDir: path.join(workspace, 'temp'),
+          buildId: '1042',
+        },
+        scanIndex: 0,
+        processRunner: new FakeDockerRunner(),
+        publisher: new Publisher(() => undefined),
+        credentials: {},
+      });
+
+      const calls = readCalls();
+      expect(calls.some((call) => call.includes('-v'))).toBe(false);
+      expect(calls.some((call) => call.some((token) => token.includes(`${workspace}:/workspace`)))).toBe(
+        false,
+      );
+    });
+
+    it('reads the report from the host path after a real docker cp copies it out', async () => {
+      await runScan({
+        defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        inputs: { scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' },
+        agent: {
+          sourcesDir: workspace,
+          agentHomeDir: workspace,
+          tempDir: path.join(workspace, 'temp'),
+          buildId: '1042',
+        },
+        scanIndex: 0,
+        processRunner: new FakeDockerRunner(),
+        publisher: new Publisher(() => undefined),
+        credentials: {},
+      });
+
+      const hostReportPath = path.join(workspace, '.trivy', 'report-0.json');
+      expect(fs.existsSync(hostReportPath)).toBe(true);
+      const raw = JSON.parse(fs.readFileSync(hostReportPath, 'utf8'));
+      expect(raw.Results[0].Vulnerabilities[0].VulnerabilityID).toBe('CVE-2024-21626');
+    });
+
+    it('runs the sarif extra format through the copy sequence too, not a mount fallback', async () => {
+      const lines: string[] = [];
+      await runScan({
+        defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        inputs: {
+          scanType: 'image',
+          target: 'app:1.4.2',
+          sourceTransfer: 'copy',
+          formats: ['json', 'sarif'],
+        },
+        agent: {
+          sourcesDir: workspace,
+          agentHomeDir: workspace,
+          tempDir: path.join(workspace, 'temp'),
+          buildId: '1042',
+        },
+        scanIndex: 0,
+        processRunner: new FakeDockerRunner(),
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      const calls = readCalls();
+      // version probe, then create/cp/start/cp/rm for the JSON scan, then the same five
+      // steps again for the sarif run.
+      expect(calls).toHaveLength(11);
+      expect(calls.some((call) => call.includes('-v'))).toBe(false);
+      expect(fs.existsSync(path.join(workspace, '.trivy', 'report-0.sarif'))).toBe(true);
+      expect(lines.some((line) => line.includes('CodeAnalysisLogs'))).toBe(true);
+    });
+  });
 });

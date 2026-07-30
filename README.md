@@ -275,14 +275,51 @@ The usual fixes, depending on how the daemon is reached:
   the agent container at that same location, so the path the agent passes to `-v` is one the host
   daemon already recognizes.
 
-This task does not attempt to work around the mismatch itself (no path translation, no `docker
-cp`, no copying sources into a volume) — guessing at a host-to-daemon path mapping could produce a
+This task does not attempt to *guess* its way around the mismatch (no path translation, no
+auto-detection of the agent's topology) — guessing at a host-to-daemon path mapping could produce a
 scan that silently runs against the wrong (or empty) directory, which is worse than failing
-loudly. Fixing the mount is an infrastructure decision for whoever administers the agent.
+loudly. But it does offer an explicit, opt-in remedy that needs no path mapping at all: see
+`sourceTransfer: copy` below.
 
 Note this only affects **filesystem**, **repository**, and **config** scans, which all depend on
 mounting the sources directory into the container. An **image** scan pulls the image by
-reference and never mounts `sourcesDir`, so it is unaffected by this class of failure.
+reference and never mounts `sourcesDir`, so it is unaffected by this class of failure — and
+`sourceTransfer` has no effect on an image scan either, for the same reason.
+
+#### `sourceTransfer: copy` — when there is no shared filesystem to fix
+
+Set the task's `sourceTransfer` input to `copy` when you cannot fix the mismatch above — for
+example, a shared agent pool you do not administer, or a cluster where the daemon and the agent
+will never share a filesystem by design. `copy` mode never bind-mounts the sources at all: instead
+it `docker create`s the container, places the sources with `docker cp` (which streams a tar over
+the docker API to the daemon, the same way a `docker save`/`docker load` pipe would, rather than
+asking the daemon to resolve a host path), `docker start -a`s it to run the scan, then `docker cp`s
+the report back out and removes the container. None of that requires the daemon to see anything on
+the agent's own filesystem, so it works identically whether the daemon is local, a sidecar, or the
+host's daemon reached through a mounted socket.
+
+```yaml
+- task: TrivyScan@1
+  inputs:
+    scanType: filesystem
+    target: .
+    sourceTransfer: copy
+```
+
+Two costs come with it, and they apply on every scan, not just the first one after switching:
+
+- **The sources are streamed into the container on every scan.** For a large repository this is
+  slower than a bind mount, which costs nothing to set up per run.
+- **The vulnerability database cannot use this agent's local cache.** The cache directory
+  (`cacheDir`) is itself a bind mount, resolved by the same daemon that cannot see this agent's
+  filesystem in the first place — mounting it in `copy` mode would just silently hand trivy an
+  empty cache, the same failure shape this whole feature exists to avoid, only relocated. So in
+  `copy` mode the cache mount is dropped instead, and trivy downloads the vulnerability database
+  fresh on every scan.
+
+`sourceTransfer` defaults to `mount` (today's behavior, unchanged) and is never inferred — leave it
+alone unless you have confirmed, the way the `bash` snippet above does, that the daemon genuinely
+cannot see this agent's sources directory.
 
 ## Development
 

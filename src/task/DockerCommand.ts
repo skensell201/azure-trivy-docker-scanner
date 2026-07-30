@@ -73,8 +73,19 @@ export function containerName(config: ResolvedScanConfig, suffix = ''): string {
   return `trivyscan-${config.buildId}-${config.scanIndex}${suffix ? `-${suffix}` : ''}`;
 }
 
+/**
+ * In `mount` mode the report lives under the bind-mounted workspace, in a `.trivy`
+ * subdirectory this task creates on the host before the scan (so it already exists from
+ * the daemon's point of view too). In `copy` mode nothing is mounted at `/workspace` at
+ * all -- it is populated by a `docker cp` the moment before the container starts -- and
+ * trivy itself will not create a missing parent directory for `--output`, so the report
+ * is written flat under `/tmp` instead, which exists in essentially every image without
+ * this task creating anything inside the container first.
+ */
 export function containerReportPath(config: ResolvedScanConfig): string {
-  return `${WORKSPACE}/.trivy/report-${config.scanIndex}.json`;
+  return config.sourceTransfer === 'copy'
+    ? `/tmp/report-${config.scanIndex}.json`
+    : `${WORKSPACE}/.trivy/report-${config.scanIndex}.json`;
 }
 
 export function hostReportPath(config: ResolvedScanConfig): string {
@@ -88,12 +99,23 @@ function extraFileName(format: ExtraFormat, scanIndex: number): string {
   return format === 'sarif' ? `report-${scanIndex}.sarif` : `sbom-${scanIndex}.json`;
 }
 
-function containerExtraPath(config: ResolvedScanConfig, format: ExtraFormat): string {
-  return `${WORKSPACE}/.trivy/${extraFileName(format, config.scanIndex)}`;
+/** Same `/tmp` reasoning as containerReportPath above, for the extra-format runs. Exported
+ * so run.ts can pass it as the source of the `docker cp ... out` in copy mode. */
+export function containerExtraPath(config: ResolvedScanConfig, format: ExtraFormat): string {
+  return config.sourceTransfer === 'copy'
+    ? `/tmp/${extraFileName(format, config.scanIndex)}`
+    : `${WORKSPACE}/.trivy/${extraFileName(format, config.scanIndex)}`;
 }
 
 export function hostExtraPath(config: ResolvedScanConfig, format: ExtraFormat): string {
   return path.posix.join(config.sourcesDir, '.trivy', extraFileName(format, config.scanIndex));
+}
+
+/** The container-name suffix for an extra-format run, shared between buildFormatArgs (which
+ * bakes it into --name) and run.ts (which needs the identical name again for the cp/start/rm
+ * steps in copy mode -- it cannot recompute --name from argv without duplicating this rule). */
+export function extraNameSuffix(format: ExtraFormat): string {
+  return format === 'sarif' ? 'sarif' : 'sbom';
 }
 
 /**
@@ -142,7 +164,7 @@ export function buildFormatArgs(
     envFilePath,
     format,
     containerExtraPath(config, format),
-    format === 'sarif' ? 'sarif' : 'sbom',
+    extraNameSuffix(format),
   );
 }
 
@@ -156,23 +178,45 @@ function buildArgs(
   const extraTrivyTokens = splitArgs(config.extraTrivyArgs);
   assertNoReservedTrivyFlags(extraTrivyTokens);
 
-  const docker = [
-    'run',
-    '--rm',
-    '--name',
-    containerName(config, nameSuffix),
-    '--env-file',
-    envFilePath,
-    '-v',
-    `${config.cacheDir}:${CACHE_MOUNT}`,
-    '-v',
-    `${config.sourcesDir}:${WORKSPACE}`,
-    '-w',
-    config.workingDirectory
-      ? resolveWithinWorkspace(config.workingDirectory, 'workingDirectory')
-      : WORKSPACE,
-  ];
+  const workingDir = config.workingDirectory
+    ? resolveWithinWorkspace(config.workingDirectory, 'workingDirectory')
+    : WORKSPACE;
 
+  // `copy` mode never bind-mounts anything for the sources: that mount is exactly what
+  // this mode exists to avoid (see run.ts's runContainerized, which docker-cp's the
+  // sources in after this container is `create`d instead). `--rm` is also dropped here:
+  // the container must still exist after it exits so the report can be `docker cp`'d back
+  // out of it -- `docker rm -f` (run.ts, in a `finally`) is what actually removes it, on
+  // every path, success or failure.
+  //
+  // The cache mount is dropped too, deliberately: it is a bind mount resolved by the same
+  // daemon that cannot see this agent's filesystem in the first place, so keeping it would
+  // silently hand trivy an empty cache directory instead of failing outright -- the exact
+  // failure shape this whole feature exists to avoid, just relocated to the cache. The
+  // consequence: in copy mode trivy downloads the vulnerability database fresh on every
+  // scan, since it can never reach whatever this agent already cached from a prior run.
+  const docker =
+    config.sourceTransfer === 'copy'
+      ? ['create', '--name', containerName(config, nameSuffix), '--env-file', envFilePath, '-w', workingDir]
+      : [
+          'run',
+          '--rm',
+          '--name',
+          containerName(config, nameSuffix),
+          '--env-file',
+          envFilePath,
+          '-v',
+          `${config.cacheDir}:${CACHE_MOUNT}`,
+          '-v',
+          `${config.sourcesDir}:${WORKSPACE}`,
+          '-w',
+          workingDir,
+        ];
+
+  // The docker-socket mount is not a sources/cache path on the agent -- it is
+  // /var/run/docker.sock on whichever host actually runs the daemon, which that same
+  // daemon can always see regardless of the agent's own filesystem -- so it is kept in
+  // both modes.
   if (config.useDockerSocket) {
     docker.push('-v', '/var/run/docker.sock:/var/run/docker.sock');
   }
@@ -236,6 +280,53 @@ function buildArgs(
   return [...docker, ...trivy];
 }
 
+/**
+ * The four `copy`-mode steps that stand in for `docker run`, used only by
+ * `runContainerized` in run.ts when `ResolvedScanConfig.sourceTransfer === 'copy'`. Each
+ * takes the already-resolved container `name` (the same one `containerName`/`--name` in
+ * `buildArgs` above produced) rather than recomputing it, so the two can never drift apart.
+ */
+
+/**
+ * Places the sources into the container's `/workspace`, which `docker create` above left
+ * empty. `docker cp` creates the destination directory when it does not already exist and
+ * its parent does, so `/workspace` needs no separate `mkdir` first. Unlike `docker run -v`,
+ * this streams a tar over the docker API, so it does not require the daemon to share a
+ * filesystem with this process -- that is the entire reason copy mode exists.
+ */
+export function buildCopyInArgs(sourcesDir: string, name: string): string[] {
+  return ['cp', sourcesDir, `${name}:${WORKSPACE}`];
+}
+
+/**
+ * `-a` attaches to the container's stdout/stderr (so it still streams to the build log the
+ * way a `docker run` scan already does) and, critically, propagates its exit code -- the
+ * same exit code `run.ts`'s existing infrastructure-failure handling (docker-not-found,
+ * db-download-failure, timeout, ...) already depends on for `mount` mode.
+ */
+export function buildStartArgs(name: string): string[] {
+  return ['start', '-a', name];
+}
+
+/**
+ * Retrieves one output file from the container back onto the host, over the same
+ * docker-cp tar stream as buildCopyInArgs -- again no shared filesystem required. The
+ * host-side directory is already created by run.ts before the scan.
+ */
+export function buildCopyOutArgs(name: string, containerPath: string, hostPath: string): string[] {
+  return ['cp', `${name}:${containerPath}`, hostPath];
+}
+
+/**
+ * Always run in a `finally` by the caller. `docker create` (unlike `docker run --rm`)
+ * leaves the container behind after it exits -- deliberately, since the report still needs
+ * to be copied out of it -- so this is what actually removes it, whether every prior step
+ * succeeded or one of them failed partway through.
+ */
+export function buildRemoveArgs(name: string): string[] {
+  return ['rm', '-f', name];
+}
+
 /** Docker's own default when an image reference names no registry at all. */
 const DOCKER_HUB_HOST = 'docker.io';
 
@@ -270,17 +361,22 @@ export function buildLoginArgs(host: string, username: string): string[] {
   return ['login', host, '--username', username, '--password-stdin'];
 }
 
+/**
+ * The version probe's only reason to mount cacheDir at all is so `VulnerabilityDB.UpdatedAt`
+ * in its output reflects whatever this agent already has cached, rather than whatever a
+ * fresh, uncached container would report. In `copy` mode that mount would be exactly the
+ * same silently-empty bind mount this whole feature exists to avoid for the sources
+ * directory -- just relocated to the cache -- so it is dropped here too, consistent with
+ * `buildArgs` above. The probe still runs and is still best-effort either way (see
+ * run.ts's own comment on it); it just never claims a cache hit it cannot have in this mode.
+ */
 export function buildVersionArgs(config: ResolvedScanConfig): string[] {
-  return [
-    'run',
-    '--rm',
-    '-v',
-    `${config.cacheDir}:${CACHE_MOUNT}`,
-    config.runner.image,
-    'version',
-    '--format',
-    'json',
-  ];
+  const docker = ['run', '--rm'];
+  if (config.sourceTransfer !== 'copy') {
+    docker.push('-v', `${config.cacheDir}:${CACHE_MOUNT}`);
+  }
+  docker.push(config.runner.image, 'version', '--format', 'json');
+  return docker;
 }
 
 export function buildTrivyEnv(

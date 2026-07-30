@@ -1,10 +1,16 @@
 import {
+  buildCopyInArgs,
+  buildCopyOutArgs,
   buildFormatArgs,
   buildLoginArgs,
+  buildRemoveArgs,
   buildScanArgs,
+  buildStartArgs,
   buildVersionArgs,
   buildTrivyEnv,
+  containerExtraPath,
   containerReportPath,
+  extraNameSuffix,
   hostExtraPath,
   hostReportPath,
   registryHostFromImage,
@@ -31,6 +37,7 @@ const config = (over: Partial<ResolvedScanConfig> = {}): ResolvedScanConfig => (
   publishArtifact: true,
   buildId: '1042',
   scanIndex: 0,
+  sourceTransfer: 'mount',
   ...over,
 });
 
@@ -268,6 +275,20 @@ describe('buildVersionArgs', () => {
       'json',
     ]);
   });
+
+  // The cache mount would be exactly as silently-empty in copy mode as the sources mount
+  // this feature exists to fix -- there is no shared filesystem with the daemon in this
+  // mode, so claiming a cache hit the probe cannot actually have would be misleading.
+  it('drops the cache mount in copy mode', () => {
+    expect(buildVersionArgs(config({ sourceTransfer: 'copy' }))).toEqual([
+      'run',
+      '--rm',
+      'registry.example.com/trivy:0.58.1',
+      'version',
+      '--format',
+      'json',
+    ]);
+  });
 });
 
 describe('buildTrivyEnv', () => {
@@ -427,5 +448,136 @@ describe('buildFormatArgs', () => {
     expect(() =>
       buildFormatArgs(config({ workingDirectory: '../../etc' }), '/tmp/e', 'sarif'),
     ).toThrow(/workingDirectory.*escapes/is);
+  });
+});
+
+describe('sourceTransfer: copy', () => {
+  const copyConfig = (over: Partial<ResolvedScanConfig> = {}) =>
+    config({ sourceTransfer: 'copy', ...over });
+
+  it('creates the container instead of running it, and drops --rm', () => {
+    const args = buildScanArgs(copyConfig(), '/tmp/trivy.env');
+    expect(args[0]).toBe('create');
+    expect(args).not.toContain('run');
+    expect(args).not.toContain('--rm');
+  });
+
+  it('never mounts the sources directory or the cache directory', () => {
+    const args = buildScanArgs(copyConfig(), '/tmp/trivy.env').join(' ');
+    expect(args).not.toContain('/agent/_work/1/s:/workspace');
+    expect(args).not.toContain('/agent/_trivy-cache:/root/.cache/trivy');
+    expect(args).not.toContain('-v');
+  });
+
+  it('still names the container, passes the env file and sets the working directory', () => {
+    const args = buildScanArgs(copyConfig(), '/tmp/trivy.env');
+    expect(args).toEqual([
+      'create',
+      '--name',
+      'trivyscan-1042-0',
+      '--env-file',
+      '/tmp/trivy.env',
+      '-w',
+      '/workspace',
+      'registry.example.com/trivy:0.58.1',
+      'image',
+      '--format',
+      'json',
+      '--output',
+      '/tmp/report-0.json',
+      '--exit-code',
+      '0',
+      '--severity',
+      'CRITICAL,HIGH',
+      '--scanners',
+      'vuln,secret',
+      '--timeout',
+      '10m',
+      '--format',
+      'json',
+      '--output',
+      '/tmp/report-0.json',
+      '--exit-code',
+      '0',
+      'app:1.4.2',
+    ]);
+  });
+
+  it('still mounts the docker socket when asked, since it is not a sources/cache path', () => {
+    expect(
+      buildScanArgs(copyConfig({ useDockerSocket: true }), '/tmp/e'),
+    ).toContain('/var/run/docker.sock:/var/run/docker.sock');
+  });
+
+  it('nests the working directory under the workspace the same way as mount mode', () => {
+    const args = buildScanArgs(copyConfig({ workingDirectory: 'subdir' }), '/tmp/e');
+    expect(args[args.indexOf('-w') + 1]).toBe('/workspace/subdir');
+  });
+
+  it('writes the report flat under /tmp, not under /workspace/.trivy', () => {
+    expect(containerReportPath(copyConfig())).toBe('/tmp/report-0.json');
+    expect(containerReportPath(copyConfig({ scanIndex: 2 }))).toBe('/tmp/report-2.json');
+  });
+
+  it('writes extra-format outputs flat under /tmp too', () => {
+    expect(containerExtraPath(copyConfig(), 'sarif')).toBe('/tmp/report-0.sarif');
+    expect(containerExtraPath(copyConfig(), 'cyclonedx')).toBe('/tmp/sbom-0.json');
+  });
+
+  it('leaves the host-side report and extra-output paths unchanged from mount mode', () => {
+    expect(hostReportPath(copyConfig())).toBe('/agent/_work/1/s/.trivy/report-0.json');
+    expect(hostExtraPath(copyConfig(), 'sarif')).toBe('/agent/_work/1/s/.trivy/report-0.sarif');
+  });
+
+  it('creates the extra-format run with its own container name, in create form too', () => {
+    const args = buildFormatArgs(copyConfig(), '/tmp/e', 'sarif');
+    expect(args[0]).toBe('create');
+    expect(args).toContain('trivyscan-1042-0-sarif');
+    expect(args).not.toContain('-v');
+    expect(args).toContain('/tmp/report-0.sarif');
+  });
+
+  it('mount mode is unaffected by the existence of copy mode', () => {
+    // Byte-for-byte pin: switching sourceTransfer to 'copy' and back must not have
+    // perturbed the 'mount' construction path at all.
+    const args = buildScanArgs(config(), '/tmp/trivy.env');
+    expect(args[0]).toBe('run');
+    expect(args).toContain('--rm');
+    expect(args).toContain('/agent/_work/1/s:/workspace');
+    expect(args).toContain('/agent/_trivy-cache:/root/.cache/trivy');
+  });
+});
+
+describe('extraNameSuffix', () => {
+  it('names sarif runs "sarif" and both sbom formats "sbom"', () => {
+    expect(extraNameSuffix('sarif')).toBe('sarif');
+    expect(extraNameSuffix('cyclonedx')).toBe('sbom');
+    expect(extraNameSuffix('spdx-json')).toBe('sbom');
+  });
+});
+
+describe('copy-mode step builders', () => {
+  it('buildCopyInArgs copies the host sources directory onto the container workspace', () => {
+    expect(buildCopyInArgs('/agent/_work/1/s', 'trivyscan-1042-0')).toEqual([
+      'cp',
+      '/agent/_work/1/s',
+      'trivyscan-1042-0:/workspace',
+    ]);
+  });
+
+  it('buildStartArgs attaches so the exit code and output stream through', () => {
+    expect(buildStartArgs('trivyscan-1042-0')).toEqual(['start', '-a', 'trivyscan-1042-0']);
+  });
+
+  it('buildCopyOutArgs copies a container path back onto a host path', () => {
+    expect(buildCopyOutArgs('trivyscan-1042-0', '/tmp/report-0.json', '/agent/_work/1/s/.trivy/report-0.json')).toEqual([
+      'cp',
+      'trivyscan-1042-0:/tmp/report-0.json',
+      '/agent/_work/1/s/.trivy/report-0.json',
+    ]);
+  });
+
+  it('buildRemoveArgs force-removes the named container', () => {
+    expect(buildRemoveArgs('trivyscan-1042-0')).toEqual(['rm', '-f', 'trivyscan-1042-0']);
   });
 });

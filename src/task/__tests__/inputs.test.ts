@@ -32,6 +32,22 @@ describe('readInputs', () => {
     expect(inputs.skipDbUpdate).toBeUndefined();
     expect(inputs.useDockerSocket).toBeUndefined();
     expect(inputs.publishArtifact).toBeUndefined();
+    expect(inputs.sourceTransfer).toBeUndefined();
+  });
+
+  it('parses the sourceTransfer input', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' });
+    expect(readInputs().sourceTransfer).toBe('copy');
+  });
+
+  it('rejects an unknown sourceTransfer value naming the allowed values', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'symlink' });
+    expect(() => readInputs()).toThrow(/mount, copy/);
+  });
+
+  it('accepts sourceTransfer case-insensitively', () => {
+    setInputs({ scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'Copy' });
+    expect(readInputs().sourceTransfer).toBe('copy');
   });
 
   it('parses severity and scanner lists', () => {
@@ -136,6 +152,7 @@ describe('readInputs', () => {
         generateSbom: 'cyclonedx',
         extraTrivyArgs: '--offline-scan',
         workingDirectory: 'services/api',
+        sourceTransfer: 'copy',
         // optionalBool consults getInput first to tell "set" from "unset"; the mocked getInput
         // needs an entry for each boolean input too, mirroring the real task lib where a set
         // boolean input still has a string value behind it.
@@ -170,6 +187,7 @@ describe('readInputs', () => {
       publishArtifact: false,
       extraTrivyArgs: '--offline-scan',
       workingDirectory: 'services/api',
+      sourceTransfer: 'copy',
     });
   });
 

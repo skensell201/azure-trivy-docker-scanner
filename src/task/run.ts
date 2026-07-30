@@ -2,13 +2,19 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { resolveConfig } from './ConfigResolver';
 import {
+  buildCopyInArgs,
+  buildCopyOutArgs,
   buildFormatArgs,
   buildLoginArgs,
+  buildRemoveArgs,
   buildScanArgs,
+  buildStartArgs,
   buildTrivyEnv,
   buildVersionArgs,
+  containerExtraPath,
   containerName,
   containerReportPath,
+  extraNameSuffix,
   ExtraFormat,
   hostExtraPath,
   hostReportPath,
@@ -17,7 +23,7 @@ import {
 } from './DockerCommand';
 import { removeEnvFile, writeEnvFile } from './EnvFile';
 import { evaluateGate, GateResult } from './GateEvaluator';
-import { ProcessResult, ProcessRunner } from './ProcessRunner';
+import { ProcessResult, ProcessRunner, RunOptions } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { parseTrivyReport, parseVersion } from './ReportParser';
 import {
@@ -143,6 +149,10 @@ function daemonCannotSeeSourcesMessage(
     'empty directory instead. Check that the daemon and the agent see ' +
     `"${config.sourcesDir}" identically: either the same volume mounted at the same mountPath ` +
     "in both containers, or a host path mounted into the agent at that same location. " +
+    'Alternatively, set the "sourceTransfer" input to "copy": it streams the sources into the ' +
+    'container over the docker API instead of bind-mounting them, so it needs no shared ' +
+    'filesystem between the agent and the daemon at all (at the cost of streaming the sources ' +
+    'in on every scan and skipping the local vulnerability-database cache). ' +
     `Detail: ${scan.stderr.trim() || scan.stdout.trim()}`
   );
 }
@@ -236,6 +246,65 @@ function resolveTrivyCredentials(
   return { username: defaults.dbRegistryUsername, password: defaults.dbRegistryPassword };
 }
 
+/**
+ * Runs one containerized trivy invocation -- the JSON scan or an extra-format run -- and
+ * returns the `ProcessResult` that represents the trivy execution itself, so every caller
+ * (the exit-code/timeout handling in `runScan` below, and `emitExtraFormat`'s own) can stay
+ * written against a single docker call's result regardless of `sourceTransfer`.
+ *
+ * `mount` mode: unchanged from before this function existed -- `setupArgs` (built by
+ * `buildScanArgs`/`buildFormatArgs`) already is `docker run ...`, and this is a single
+ * `processRunner.run` call with the same arguments and options a direct call would have
+ * used, so `mount` mode's behavior is byte-for-byte identical to before.
+ *
+ * `copy` mode: `setupArgs` is `docker create ...` instead (no sources/cache mount, no
+ * `--rm`). Sources are streamed in with `docker cp`, the container is started with
+ * `docker start -a` -- the `-a` is what still propagates the exit code the caller depends
+ * on -- and, only once that has finished, the output file is streamed back out with another
+ * `docker cp`. `docker rm -f` always runs in the `finally`, whatever happened above, so a
+ * failure at any step cannot leave the container behind. A failure at `create` or the
+ * copy-in step short-circuits before ever starting the container, and is returned as-is for
+ * the caller's existing generic-failure handling to report.
+ */
+async function runContainerized(
+  config: ResolvedScanConfig,
+  processRunner: ProcessRunner,
+  setupArgs: string[],
+  name: string,
+  containerOutputPath: string,
+  hostOutputPath: string,
+  runOptions: RunOptions,
+): Promise<ProcessResult> {
+  if (config.sourceTransfer !== 'copy') {
+    return processRunner.run('docker', setupArgs, runOptions);
+  }
+
+  try {
+    const create = await processRunner.run('docker', setupArgs);
+    if (create.exitCode !== 0) {
+      return create;
+    }
+
+    const copyIn = await processRunner.run('docker', buildCopyInArgs(config.sourcesDir, name));
+    if (copyIn.exitCode !== 0) {
+      return copyIn;
+    }
+
+    const start = await processRunner.run('docker', buildStartArgs(name), runOptions);
+    if (start.exitCode !== 0 || start.timedOut) {
+      return start;
+    }
+
+    const copyOut = await processRunner.run(
+      'docker',
+      buildCopyOutArgs(name, containerOutputPath, hostOutputPath),
+    );
+    return copyOut.exitCode === 0 ? start : copyOut;
+  } finally {
+    await processRunner.run('docker', buildRemoveArgs(name));
+  }
+}
+
 export interface RunScanArgs {
   defaults: DefaultsConfig;
   runners: RunnerConfig[];
@@ -323,13 +392,26 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     // `formats` therefore only selects which *additional* outputs (the table log, sarif)
     // are produced alongside it -- listing or omitting 'json' in `formats` has no effect,
     // by design.
-    const scan = await processRunner.run('docker', buildScanArgs(config, envFile), {
-      timeoutMs,
-      onStdout: (chunk) => process.stdout.write(chunk),
-    });
+    const scan = await runContainerized(
+      config,
+      processRunner,
+      buildScanArgs(config, envFile),
+      containerName(config),
+      containerReportPath(config),
+      hostReportPath(config),
+      { timeoutMs, onStdout: (chunk) => process.stdout.write(chunk) },
+    );
 
     if (scan.timedOut) {
-      await processRunner.run('docker', ['rm', '-f', containerName(config)]);
+      // In copy mode runContainerized's own `finally` already removed the container (it
+      // never passes --rm to `docker create`, so removal only ever happens there); doing
+      // it again here would just be a second, redundant `docker rm -f` against a
+      // container that is already gone. In mount mode `docker run --rm` normally removes
+      // the container on exit, but a SIGKILL from a timeout can race that cleanup, so the
+      // explicit removal here stays for that mode exactly as before.
+      if (config.sourceTransfer !== 'copy') {
+        await processRunner.run('docker', buildRemoveArgs(containerName(config)));
+      }
       throw new ScanExecutionError(
         `The scan exceeded ${config.timeoutMinutes} minutes and was killed. Raise the timeoutMinutes input or the collection default.`,
       );
@@ -478,11 +560,17 @@ async function emitExtraFormat(
   publisher: Publisher,
   publish: (hostPath: string) => void,
 ): Promise<void> {
-  let result;
+  let result: ProcessResult;
   try {
-    result = await processRunner.run('docker', buildFormatArgs(config, envFile, format), {
-      timeoutMs,
-    });
+    result = await runContainerized(
+      config,
+      processRunner,
+      buildFormatArgs(config, envFile, format),
+      containerName(config, extraNameSuffix(format)),
+      containerExtraPath(config, format),
+      hostExtraPath(config, format),
+      { timeoutMs },
+    );
   } catch (error) {
     publisher.warn(
       `Could not produce the ${format} output: ${(error as Error).message}. The scan result itself is unaffected.`,

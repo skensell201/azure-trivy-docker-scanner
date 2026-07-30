@@ -1071,4 +1071,168 @@ describe('runScan', () => {
       expect(lines.some((line) => line.includes('type=warning'))).toBe(false);
     });
   });
+
+  describe('sourceTransfer: copy', () => {
+    /** Simulates `docker cp <name>:<containerPath> <hostPath>` (the "copy out" step) by
+     * writing straight to the host destination the moment it is invoked -- this fake
+     * runner has no real per-container filesystem, so it stands in for "trivy already
+     * wrote the report inside the container" the same way `writeReport` stands in for a
+     * real runner image in mount mode. A plain `cp <sourcesDir> name:/workspace` (copy
+     * in) has no ':' in its *first* argument, so it is left alone. */
+    const writeReportOnCopyOut = (content: string) => (args: string[]) => {
+      if (args[0] === 'cp' && args[1].includes(':')) {
+        fs.writeFileSync(args[2], content);
+      }
+    };
+
+    const copyInputs: TaskInputs = { ...inputs, sourceTransfer: 'copy' };
+
+    const dockerSteps = (runner: FakeRunner): string[] =>
+      runner.calls.filter((call) => !call.args.includes('version')).map((call) => call.args[0]);
+
+    it('issues create, cp-in, start, cp-out and rm in that order', async () => {
+      const runner = new FakeRunner(writeReportOnCopyOut(reportBody));
+      await runScan({
+        defaults,
+        runners,
+        inputs: copyInputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(dockerSteps(runner)).toEqual(['create', 'cp', 'start', 'cp', 'rm']);
+    });
+
+    it('never passes -v for the sources or the cache mount', async () => {
+      const runner = new FakeRunner(writeReportOnCopyOut(reportBody));
+      await runScan({
+        defaults,
+        runners,
+        inputs: copyInputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(runner.calls.some((call) => call.args.includes('-v'))).toBe(false);
+    });
+
+    it('reads the report from the host path after it is copied out of the container', async () => {
+      const runner = new FakeRunner(writeReportOnCopyOut(reportBody));
+      const result = await runScan({
+        defaults,
+        runners,
+        inputs: copyInputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(result.reportPath).toBe(path.join(workspace, '.trivy', 'report-0.json'));
+      expect(result.report.findings).toHaveLength(1);
+      expect(result.gate.outcome).toBe('failed');
+    });
+
+    it('still removes the container when a step mid-sequence fails, and does not attempt start or cp-out', async () => {
+      const runner = new FakeRunner();
+      runner.results = [
+        { exitCode: 0, stdout: '', stderr: '', timedOut: false }, // create
+        { exitCode: 1, stdout: '', stderr: 'cp: no such file or directory', timedOut: false }, // cp-in fails
+      ];
+      await expect(
+        runScan({
+          defaults,
+          runners,
+          inputs: copyInputs,
+          agent,
+          scanIndex: 0,
+          processRunner: runner,
+          publisher: new Publisher((line) => lines.push(line)),
+          credentials: {},
+        }),
+      ).rejects.toThrow();
+      expect(dockerSteps(runner)).toEqual(['create', 'cp', 'rm']);
+    });
+
+    it('removes the container exactly once after a timeout, without runScan issuing a second rm', async () => {
+      const runner = new FakeRunner();
+      runner.results = [
+        { exitCode: 0, stdout: '', stderr: '', timedOut: false }, // create
+        { exitCode: 0, stdout: '', stderr: '', timedOut: false }, // cp-in
+        { exitCode: 124, stdout: '', stderr: '', timedOut: true }, // start times out
+      ];
+      await expect(
+        runScan({
+          defaults,
+          runners,
+          inputs: copyInputs,
+          agent,
+          scanIndex: 0,
+          processRunner: runner,
+          publisher: new Publisher((line) => lines.push(line)),
+          credentials: {},
+        }),
+      ).rejects.toThrow(/timeoutMinutes/);
+      expect(runner.calls.filter((call) => call.args[0] === 'rm')).toHaveLength(1);
+    });
+
+    it('mount mode still issues a single plain docker run for the scan, unaffected by copy mode existing', async () => {
+      const runner = new FakeRunner(writeReport);
+      await invoke(runner);
+      expect(dockerSteps(runner)).toEqual(['run']);
+    });
+
+    it('runs the sarif extra format through the same create/cp/start/cp/rm sequence, with its own container name', async () => {
+      const runner = new FakeRunner(writeReportOnCopyOut(reportBody));
+      const result = await runScan({
+        defaults,
+        runners,
+        inputs: { ...copyInputs, formats: ['json', 'sarif'] },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      expect(result.gate.outcome).toBe('failed');
+      const names = runner.calls
+        .filter((call) => call.args.includes('--name'))
+        .map((call) => call.args[call.args.indexOf('--name') + 1]);
+      expect(names).toEqual(['trivyscan-1042-0', 'trivyscan-1042-0-sarif']);
+      expect(dockerSteps(runner)).toEqual([
+        'create',
+        'cp',
+        'start',
+        'cp',
+        'rm',
+        'create',
+        'cp',
+        'start',
+        'cp',
+        'rm',
+      ]);
+      expect(lines.some((line) => line.includes('CodeAnalysisLogs'))).toBe(true);
+    });
+
+    it('runs the sbom extra format through the copy sequence too, never falling back to a mount', async () => {
+      const runner = new FakeRunner(writeReportOnCopyOut(reportBody));
+      await runScan({
+        defaults,
+        runners,
+        inputs: { ...copyInputs, generateSbom: 'cyclonedx' },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(runner.calls.some((call) => call.args.includes('-v'))).toBe(false);
+      expect(lines.some((line) => line.includes('TrivySBOM'))).toBe(true);
+    });
+  });
 });

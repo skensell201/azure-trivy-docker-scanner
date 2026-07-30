@@ -255,6 +255,7 @@ describe('Fix 4: whole-object contract', () => {
       extraTrivyArgs: undefined,
       buildId: '1042',
       scanIndex: 0,
+      sourceTransfer: 'mount',
     });
   });
 
@@ -291,6 +292,7 @@ describe('Fix 4: whole-object contract', () => {
       publishArtifact: false,
       extraTrivyArgs: '--offline-scan',
       workingDirectory: 'subdir',
+      sourceTransfer: 'copy',
     };
 
     const config = resolveConfig({
@@ -324,7 +326,19 @@ describe('Fix 4: whole-object contract', () => {
       extraTrivyArgs: '--offline-scan',
       buildId: '1042',
       scanIndex: 3,
+      sourceTransfer: 'copy',
     });
+  });
+
+  it('defaults sourceTransfer to mount and is not gated by allowOverrides', () => {
+    const config = resolveConfig({
+      defaults: { ...defaults, allowOverrides: [] },
+      runners,
+      inputs: inputs({ sourceTransfer: 'copy' }),
+      agent,
+      scanIndex: 0,
+    });
+    expect(config.sourceTransfer).toBe('copy');
   });
 });
 

@@ -6,6 +6,7 @@ import {
   SbomFormat,
   Scanner,
   ScanType,
+  SourceTransfer,
   Severity,
   TaskInputs,
 } from '../shared/types';
@@ -14,6 +15,7 @@ const SCAN_TYPES: ScanType[] = ['image', 'filesystem', 'repository', 'config', '
 const SCANNERS: Scanner[] = ['vuln', 'secret', 'misconfig', 'license'];
 const FORMATS: OutputFormat[] = ['table', 'json', 'sarif'];
 const SBOM_FORMATS: SbomFormat[] = ['off', 'cyclonedx', 'spdx-json'];
+const SOURCE_TRANSFERS: SourceTransfer[] = ['mount', 'copy'];
 
 // Every vocabulary this module validates against is lowercase, so a value that merely differs
 // in case (e.g. "Vuln", "Image") is normalized rather than treated as a hard failure alongside
@@ -132,6 +134,7 @@ export function readInputs(): TaskInputs {
   const timeoutRaw = tl.getInput('timeoutMinutes');
   const formatsRaw = tl.getInput('formats');
   const sbomRaw = tl.getInput('generateSbom');
+  const sourceTransferRaw = tl.getInput('sourceTransfer');
 
   let timeoutMinutes: number | undefined;
   if (timeoutRaw !== undefined) {
@@ -161,5 +164,9 @@ export function readInputs(): TaskInputs {
     publishArtifact: optionalBool('publishArtifact'),
     extraTrivyArgs: tl.getInput('extraTrivyArgs'),
     workingDirectory: trimmedInput('workingDirectory'),
+    sourceTransfer:
+      sourceTransferRaw === undefined
+        ? undefined
+        : oneOf('sourceTransfer', sourceTransferRaw, SOURCE_TRANSFERS),
   };
 }

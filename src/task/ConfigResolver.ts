@@ -115,6 +115,10 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     extraTrivyArgs: pick('extraTrivyArgs', undefined),
     buildId: agent.buildId,
     scanIndex,
+    // Not gated by allowOverrides -- see the doc comment on TaskInputs.sourceTransfer:
+    // this describes the agent's own topology, not a security policy, so (like
+    // `formats` and `workingDirectory` above) any pipeline may always set it directly.
+    sourceTransfer: inputs.sourceTransfer ?? 'mount',
   };
 
   if (violations.length > 0) {
