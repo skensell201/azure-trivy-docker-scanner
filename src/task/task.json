@@ -14,7 +14,7 @@
   "version": {
     "Major": 1,
     "Minor": 0,
-    "Patch": 5
+    "Patch": 6
   },
   "instanceNameFormat": "Trivy scan $(target)",
   "groups": [
@@ -124,6 +124,14 @@
       "label": "Publish report artifact",
       "required": false,
       "groupName": "output"
+    },
+    {
+      "name": "publishTestResults",
+      "type": "boolean",
+      "label": "Publish findings as test results",
+      "required": false,
+      "groupName": "output",
+      "helpMarkDown": "Publishes every finding as a JUnit test case via `results.publish`, giving each one its own row in the Tests tab with history (Failing since, New vs. Existing) and filtering, for free. Off by default: turning this on makes every finding a *failed* test, so a build whose gate passes (failOn not tripped, or the gate disabled) would suddenly show failing tests in the Tests tab. That is exactly the point for a team that wants per-finding history there, but it is a surprise for everyone else, so it is opt-in rather than on by default. See the README section on publishing test results."
     },
     {
       "name": "targetRegistryConnection",

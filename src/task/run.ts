@@ -23,6 +23,7 @@ import {
 } from './DockerCommand';
 import { removeEnvFile, writeEnvFile } from './EnvFile';
 import { evaluateGate, GateResult } from './GateEvaluator';
+import { buildJUnitXml } from './JUnitReport';
 import { ProcessResult, ProcessRunner, RunOptions } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { parseTrivyReport, parseVersion } from './ReportParser';
@@ -535,6 +536,28 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     // Unlike the attachment above, a user downloading build results wants trivy's own
     // output -- that is what "TrivyReports" has always meant -- so this stays the raw file.
     publisher.publishArtifact(reportPath, 'TrivyReports');
+  }
+  if (config.publishTestResults) {
+    // buildJUnitXml is a pure function over `report`, the already-parsed NormalizedReport this
+    // process holds in memory -- not a second trivy invocation and not a new container round
+    // trip. That matters specifically for `sourceTransfer: copy`: the report was already
+    // streamed out of the container once (see runContainerized above) to produce `report` in
+    // the first place, so this XML is generated entirely on the agent from data already here,
+    // the same way the normalized-report attachment above is. Failing to write or publish it
+    // only warns (like the sarif/sbom extra formats below-in-spirit): this is an opt-in
+    // reporting convenience, not the gate, and a build that otherwise scanned successfully must
+    // not fail because of it.
+    const junitPath = path.join(config.sourcesDir, '.trivy', `junit-${config.scanIndex}.xml`);
+    const runTitle = `Trivy - ${report.artifactName}`;
+    try {
+      fs.writeFileSync(junitPath, buildJUnitXml(report, { suiteName: runTitle }));
+      publisher.publishJUnit(junitPath, runTitle);
+    } catch (error) {
+      publisher.warn(
+        `Could not write the JUnit test-results file to "${junitPath}": ${(error as Error).message}. ` +
+          'Test results were not published for this scan; the gate and every other output are unaffected.',
+      );
+    }
   }
   if (gate.blocking.length > 0) {
     publisher.logBlockingFindings(gate.blocking);

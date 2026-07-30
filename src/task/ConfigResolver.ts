@@ -112,6 +112,12 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     formats: inputs.formats ?? ['table', 'json'],
     generateSbom: inputs.generateSbom ?? 'off',
     publishArtifact: inputs.publishArtifact ?? true,
+    // Deliberately off by default (see TaskInputs.publishTestResults and the README section on
+    // publishing test results): turning it on makes every finding a *failed* JUnit test case, so
+    // a pipeline whose gate passes would suddenly show failing tests in the Tests tab. Not gated
+    // by allowOverrides -- see that field's own doc comment for why -- so, like publishArtifact,
+    // it is read straight from the pipeline input with no admin default to fall back to.
+    publishTestResults: inputs.publishTestResults ?? false,
     extraTrivyArgs: pick('extraTrivyArgs', undefined),
     buildId: agent.buildId,
     scanIndex,

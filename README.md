@@ -321,6 +321,44 @@ Two costs come with it, and they apply on every scan, not just the first one aft
 alone unless you have confirmed, the way the `bash` snippet above does, that the daemon genuinely
 cannot see this agent's sources directory.
 
+## Publishing findings to the Tests tab
+
+By default, findings are readable in the build log's table (`formats: table`), a build issue per
+blocking finding, the JSON report attached to the build, and the `TrivyReports` artifact — but
+none of those give a single finding its own history across runs. Azure DevOps's **Tests** tab
+already does exactly that for free: a row per test, "Failing since" dates, New vs. Existing
+tracking, and filtering, with no custom UI to build or maintain. Set `publishTestResults: true`
+to get it:
+
+```yaml
+- task: TrivyScan@1
+  inputs:
+    target: app:1.4.2
+    publishTestResults: true
+```
+
+That one line converts the same normalized report the gate already evaluated into a JUnit XML
+document (`src/task/JUnitReport.ts`) and publishes it with the `results.publish` logging command.
+Every finding becomes its own `<testcase>`, named `[SEVERITY] ID` (e.g. `[CRITICAL]
+CVE-2024-21626`) so it stays the same test across runs and the tab's per-test history actually
+means something, grouped by finding kind (vulnerability/secret/misconfiguration/license) via
+`classname` so the tab can filter by it. The failure message carries the affected package,
+installed and fixed versions, and the title; the longer detail (target, location, full title)
+sits in the failure body. A clean scan still publishes one run, with a single synthetic passing
+test case rather than an empty (and easily mistaken for broken) test run.
+
+**Every finding becomes a *failed* test case — this is the point, not a bug.** A pipeline whose
+gate passes (the findings are all below `failOn`, or the gate is disabled with `failOn: none`)
+will still show red in the Tests tab once this is on: the gate and the Tests tab answer different
+questions ("should the build fail" vs. "what needs attention, with history"), and a build can
+legitimately be green while its tests are red. That surprising-by-default combination is exactly
+why `publishTestResults` defaults to `false` — turning it on is a deliberate choice for a team
+that wants this view, not something every pipeline should wake up to.
+
+The JSON report attachment and the `TrivyReports` build artifact are unaffected either way: this
+is a third, independent publishing mechanism layered on top of the same parsed report, not a
+replacement for either of the other two.
+
 ## Troubleshooting
 
 - **An empty scan is a normal outcome.** When trivy finds nothing at all — no vulnerable

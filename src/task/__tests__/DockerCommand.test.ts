@@ -35,6 +35,7 @@ const config = (over: Partial<ResolvedScanConfig> = {}): ResolvedScanConfig => (
   formats: ['table', 'json'],
   generateSbom: 'off',
   publishArtifact: true,
+  publishTestResults: false,
   buildId: '1042',
   scanIndex: 0,
   sourceTransfer: 'mount',

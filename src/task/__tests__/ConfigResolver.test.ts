@@ -252,6 +252,7 @@ describe('Fix 4: whole-object contract', () => {
       formats: ['table', 'json'],
       generateSbom: 'off',
       publishArtifact: true,
+      publishTestResults: false,
       extraTrivyArgs: undefined,
       buildId: '1042',
       scanIndex: 0,
@@ -290,6 +291,7 @@ describe('Fix 4: whole-object contract', () => {
       formats: ['json', 'sarif'],
       generateSbom: 'cyclonedx',
       publishArtifact: false,
+      publishTestResults: true,
       extraTrivyArgs: '--offline-scan',
       workingDirectory: 'subdir',
       sourceTransfer: 'copy',
@@ -323,6 +325,7 @@ describe('Fix 4: whole-object contract', () => {
       formats: ['json', 'sarif'],
       generateSbom: 'cyclonedx',
       publishArtifact: false,
+      publishTestResults: true,
       extraTrivyArgs: '--offline-scan',
       buildId: '1042',
       scanIndex: 3,
@@ -339,6 +342,20 @@ describe('Fix 4: whole-object contract', () => {
       scanIndex: 0,
     });
     expect(config.sourceTransfer).toBe('copy');
+  });
+
+  // publishTestResults changes only which views the already-evaluated gate result is shown
+  // through (see the doc comment on TaskInputs.publishTestResults) -- it has no gate-integrity
+  // implication, so, like publishArtifact and sourceTransfer, it is never gated by allowOverrides.
+  it('defaults publishTestResults to false and is not gated by allowOverrides', () => {
+    const config = resolveConfig({
+      defaults: { ...defaults, allowOverrides: [] },
+      runners,
+      inputs: inputs({ publishTestResults: true }),
+      agent,
+      scanIndex: 0,
+    });
+    expect(config.publishTestResults).toBe(true);
   });
 });
 

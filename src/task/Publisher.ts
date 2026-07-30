@@ -21,13 +21,14 @@ export class Publisher {
    * Any stdout line beginning with `##vso[` is executed by the agent as a command,
    * regardless of which code emitted it or which field the text came from. That means
    * every value interpolated anywhere in this class — finding titles, package names,
-   * versions, file paths, the scan target, the runner alias, image and versions — must
-   * be routed through here before it reaches a `write()` call. It is tempting to treat
-   * some fields as "safe" because they look administrator-controlled, but `target` is
-   * proof that intuition fails: it is the one input deliberately left outside the
-   * override policy (it *is* the scan), so a pipeline author who cannot bypass the gate
-   * through `severities` or `failOn` could otherwise bypass it entirely here. Do not add
-   * a sixth interpolated field without sanitizing it.
+   * versions, file paths, the scan target, the runner alias, image and versions, and
+   * (see `publishJUnit`) the JUnit run title — must be routed through here before it
+   * reaches a `write()` call. It is tempting to treat some fields as "safe" because they
+   * look administrator-controlled, but `target` is proof that intuition fails: it is the
+   * one input deliberately left outside the override policy (it *is* the scan), so a
+   * pipeline author who cannot bypass the gate through `severities` or `failOn` could
+   * otherwise bypass it entirely here. Do not add another interpolated field without
+   * sanitizing it.
    *
    * Two defences, both needed:
    *  - a raw newline would start a second physical line, so newlines become a space;
@@ -78,6 +79,24 @@ export class Publisher {
   publishArtifact(hostPath: string, artifactName: string): void {
     this.write(
       `##vso[artifact.upload artifactname=${artifactName};]${this.sanitizeForLogLine(hostPath)}`,
+    );
+  }
+
+  /**
+   * Publishes the JUnit XML built by `JUnitReport.buildJUnitXml` as a test run, which is what
+   * gives every finding its own row (with history) in the Tests tab instead of only the log or
+   * a downloadable JSON attachment. `mergeResults=false` keeps each scan step's findings in
+   * their own run rather than folding several `TrivyScan` steps in one job into a single run
+   * that would blur which step a given failing test came from.
+   *
+   * `runTitle` is not administrator-controlled the same way `hostPath` is not: run.ts builds it
+   * from `report.artifactName`, which ultimately traces back to the scan `target` - the one
+   * field deliberately left outside the override policy (see the class doc comment) - so it
+   * goes through `sanitizeForLogLine` exactly like every other value here.
+   */
+  publishJUnit(hostPath: string, runTitle: string): void {
+    this.write(
+      `##vso[results.publish type=JUnit;mergeResults=false;runTitle=${this.sanitizeForLogLine(runTitle)};]${this.sanitizeForLogLine(hostPath)}`,
     );
   }
 

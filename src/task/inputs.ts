@@ -162,6 +162,7 @@ export function readInputs(): TaskInputs {
     formats: formatsRaw === undefined ? undefined : listOf('formats', formatsRaw, FORMATS),
     generateSbom: sbomRaw === undefined ? undefined : oneOf('generateSbom', sbomRaw, SBOM_FORMATS),
     publishArtifact: optionalBool('publishArtifact'),
+    publishTestResults: optionalBool('publishTestResults'),
     extraTrivyArgs: tl.getInput('extraTrivyArgs'),
     workingDirectory: trimmedInput('workingDirectory'),
     sourceTransfer:

@@ -100,6 +100,17 @@ export interface TaskInputs {
   formats?: OutputFormat[];
   generateSbom?: SbomFormat;
   publishArtifact?: boolean;
+  /**
+   * Not an `OverridableField`, for the same reason `publishArtifact` above is not one:
+   * `allowOverrides` exists to protect the *integrity* of the scan and its gate (a pipeline
+   * author must not be able to weaken `severities`, `failOn`, or slip in `extraTrivyArgs` to
+   * quietly defeat them). Publishing every finding as a JUnit test result changes nothing
+   * about the scan, the gate, or which findings exist -- it only adds a second, opt-in *view*
+   * onto results the gate has already evaluated. There is no integrity reason for a collection
+   * administrator to forbid a pipeline from turning on a reporting convenience, so -- like
+   * `formats`, `generateSbom` and `publishArtifact` -- any pipeline may always set it directly.
+   */
+  publishTestResults?: boolean;
   extraTrivyArgs?: string;
   workingDirectory?: string;
   /**
@@ -142,6 +153,7 @@ export interface ResolvedScanConfig {
   formats: OutputFormat[];
   generateSbom: SbomFormat;
   publishArtifact: boolean;
+  publishTestResults: boolean;
   extraTrivyArgs?: string;
   buildId: string;
   /** Distinguishes several task instances in one job so their containers and report files do not collide. */

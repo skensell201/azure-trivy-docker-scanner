@@ -291,6 +291,52 @@ describe('runScan', () => {
     expect(lines.some((line) => line.includes('task.addattachment'))).toBe(true);
   });
 
+  describe('publishTestResults', () => {
+    it('does not publish JUnit test results by default', async () => {
+      await invoke(new FakeRunner(writeReport));
+      expect(lines.some((line) => line.includes('results.publish'))).toBe(false);
+    });
+
+    it('publishes JUnit test results when enabled, and the published path is the file that was written', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners,
+        inputs: { ...inputs, publishTestResults: true },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      const line = lines.find((l) => l.includes('results.publish'));
+      expect(line).toBeDefined();
+      expect(line).toContain('type=JUnit;mergeResults=false;runTitle=Trivy - app:1.4.2;');
+
+      const hostPath = attachedPath((l) => l.includes('results.publish'));
+      expect(fs.existsSync(hostPath)).toBe(true);
+      const xml = fs.readFileSync(hostPath, 'utf8');
+      expect(xml).toContain('<testsuite');
+      expect(xml).toContain('CVE-1');
+    });
+
+    it('does not publish JUnit test results when explicitly disabled', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners,
+        inputs: { ...inputs, publishTestResults: false },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(lines.some((line) => line.includes('results.publish'))).toBe(false);
+    });
+  });
+
   it('deletes the env file even when the scan fails', async () => {
     const runner = new FakeRunner();
     runner.results = [{ exitCode: 125, stdout: '', stderr: 'docker: not found', timedOut: false }];

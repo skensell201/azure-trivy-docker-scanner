@@ -32,6 +32,7 @@ describe('readInputs', () => {
     expect(inputs.skipDbUpdate).toBeUndefined();
     expect(inputs.useDockerSocket).toBeUndefined();
     expect(inputs.publishArtifact).toBeUndefined();
+    expect(inputs.publishTestResults).toBeUndefined();
     expect(inputs.sourceTransfer).toBeUndefined();
   });
 
@@ -88,6 +89,14 @@ describe('readInputs', () => {
       { useDockerSocket: true },
     );
     expect(readInputs().useDockerSocket).toBe(true);
+  });
+
+  it('reads publishTestResults only when the pipeline set it', () => {
+    setInputs(
+      { scanType: 'image', target: 'app:1.4.2', publishTestResults: 'true' },
+      { publishTestResults: true },
+    );
+    expect(readInputs().publishTestResults).toBe(true);
   });
 
   // Amendment: FailOn excludes 'UNKNOWN' because it is a meaningless threshold (it would fail
@@ -160,12 +169,14 @@ describe('readInputs', () => {
         skipDbUpdate: 'true',
         useDockerSocket: 'true',
         publishArtifact: 'false',
+        publishTestResults: 'true',
       },
       {
         ignoreUnfixed: true,
         skipDbUpdate: true,
         useDockerSocket: true,
         publishArtifact: false,
+        publishTestResults: true,
       },
     );
 
@@ -185,6 +196,7 @@ describe('readInputs', () => {
       formats: ['table', 'json'],
       generateSbom: 'cyclonedx',
       publishArtifact: false,
+      publishTestResults: true,
       extraTrivyArgs: '--offline-scan',
       workingDirectory: 'services/api',
       sourceTransfer: 'copy',

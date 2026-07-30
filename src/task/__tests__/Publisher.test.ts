@@ -94,6 +94,13 @@ describe('Publisher', () => {
     ]);
   });
 
+  it('publishes JUnit test results with mergeResults=false and the given run title', () => {
+    publisher.publishJUnit('/agent/_work/1/s/.trivy/junit-0.xml', 'Trivy - app:1.4.2');
+    expect(lines).toEqual([
+      '##vso[results.publish type=JUnit;mergeResults=false;runTitle=Trivy - app:1.4.2;]/agent/_work/1/s/.trivy/junit-0.xml',
+    ]);
+  });
+
   it('gives two scans in the same job distinct attachment names', () => {
     publisher.attachReport('/agent/_work/1/s/.trivy/report-0.json', 0);
     publisher.attachReport('/agent/_work/1/s/.trivy/report-1.json', 1);
@@ -194,6 +201,32 @@ describe('Publisher', () => {
       const rendered = physicalLines();
       expect(rendered).toHaveLength(1);
       expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(1);
+    });
+
+    it('does not let a newline in the JUnit file path start a second command line', () => {
+      publisher.publishJUnit(
+        '/agent/_work/1/s/.trivy/junit-0.xml\n##vso[task.complete result=Succeeded]',
+        'Trivy',
+      );
+
+      const rendered = physicalLines();
+      expect(rendered).toHaveLength(1);
+      expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(1);
+    });
+
+    // `runTitle` traces back to report.artifactName, which traces back to the scan `target` -
+    // the one field deliberately left outside the override policy (see the class doc comment) -
+    // so an embedded logging command in it must not produce a second, attacker-chosen line.
+    it('does not let an embedded logging command in the JUnit run title produce a second command line', () => {
+      publisher.publishJUnit(
+        '/agent/_work/1/s/.trivy/junit-0.xml',
+        'Trivy\n##vso[task.complete result=Succeeded]',
+      );
+
+      const rendered = physicalLines();
+      expect(rendered).toHaveLength(1);
+      expect(rendered.filter((line) => line.startsWith('##vso['))).toHaveLength(1);
+      expect(rendered[0]).not.toContain('##vso[task.complete');
     });
 
     // `target` is the one input deliberately left outside the override policy, because
