@@ -420,6 +420,70 @@ describe('runScan', () => {
     await expect(invoke(runner)).rejects.toThrow(/infrastructure failure/i);
   });
 
+  // Real-installation finding: the agent itself runs in a container (e.g. a Kubernetes pod)
+  // with the docker daemon in a sidecar or reached through a mounted host socket. `docker run
+  // -v <sourcesDir>:/workspace` is resolved by the *daemon*, not by this task, so when the
+  // daemon lives in a different mount namespace it cannot see the agent's sourcesDir and
+  // silently substitutes an empty directory instead of failing the mount outright. Trivy then
+  // scans zero files and cannot even write its own report there, surfacing as an opaque
+  // "docker exited with code 1 ... infrastructure failure" that gives no hint the real
+  // problem is the daemon's view of the filesystem, not trivy or the report path.
+  it('explains that the docker daemon could not see the sources directory when trivy could not create the report at the container path', async () => {
+    const runner = new FakeRunner();
+    runner.results = [
+      {
+        exitCode: 1,
+        stdout: 'INFO  Number of language-specific files  num=0',
+        stderr:
+          'FATAL run error: report error: unable to write results: failed to create a file: ' +
+          'failed to create output file: open /workspace/.trivy/report-0.json: no such file or directory',
+        timedOut: false,
+      },
+    ];
+    let error: Error | undefined;
+    try {
+      await invoke(runner);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error?.message).toMatch(/docker daemon/i);
+    expect(error?.message).toContain(workspace);
+    expect(error?.message).toMatch(/mount namespace/i);
+    expect(error?.message).toMatch(/mountPath|mounted/i);
+  });
+
+  // Fall-through: a non-zero exit whose output happens to mention the container report path
+  // (or "no such file or directory") must not be mislabelled as the daemon-mismatch case when
+  // the report file was actually produced -- e.g. a later step in the same container failing
+  // after trivy already wrote its report successfully. Guessing wrong here would send someone
+  // chasing a daemon mount problem that does not exist.
+  it('does not mislabel a non-zero exit as a daemon mount mismatch when the report file was actually written', async () => {
+    const runner = new FakeRunner(() => {
+      writeReport();
+    });
+    runner.results = [
+      {
+        exitCode: 1,
+        stdout: '',
+        stderr:
+          'some later step failed referencing /workspace/.trivy/report-0.json: no such file or directory',
+        timedOut: false,
+      },
+    ];
+    await expect(invoke(runner)).rejects.toThrow(/infrastructure failure/i);
+  });
+
+  // Fall-through: an unrelated non-zero exit with a missing report file, but whose output does
+  // not mention the container report path at all, must still fall back to the generic message
+  // rather than being guessed as the daemon mismatch case.
+  it('does not mislabel a missing report as a daemon mount mismatch when the output does not mention the container report path', async () => {
+    const runner = new FakeRunner();
+    runner.results = [
+      { exitCode: 1, stdout: '', stderr: 'panic: some unrelated trivy crash', timedOut: false },
+    ];
+    await expect(invoke(runner)).rejects.toThrow(/infrastructure failure/i);
+  });
+
   it('names the timeout input when the container is killed', async () => {
     const runner = new FakeRunner();
     runner.results = [{ exitCode: 137, stdout: '', stderr: '', timedOut: true }];

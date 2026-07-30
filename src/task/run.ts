@@ -8,6 +8,7 @@ import {
   buildTrivyEnv,
   buildVersionArgs,
   containerName,
+  containerReportPath,
   ExtraFormat,
   hostExtraPath,
   hostReportPath,
@@ -88,6 +89,61 @@ function dbDownloadFailureMessage(
     `The vulnerability database could not be downloaded from dbRepository "${config.dbRepository}" ` +
     `(${credentialNote}). Check that this agent can reach that registry and that any required ` +
     'credentials are configured for it.'
+  );
+}
+
+/**
+ * A real installation surfaced this as generic "docker exited with code 1 ... infrastructure
+ * failure", which pointed nowhere useful: trivy's own message ("unable to write results: failed
+ * to create a file: failed to create output file: open /workspace/.trivy/report-0.json: no such
+ * file or directory") looks like a report-path bug in this task, and "Number of language-specific
+ * files num=0" looks like an empty repository. Neither is true. `docker run -v
+ * <sourcesDir>:/workspace` is resolved by the *docker daemon*, not by this process -- so when the
+ * agent that invokes docker is itself containerised (a Kubernetes pod, say) and the daemon lives
+ * in a different mount namespace (a sidecar daemon, or the host's daemon reached through a
+ * mounted socket), the daemon cannot see the path the agent asked it to mount and silently
+ * substitutes an empty directory instead of failing the mount outright. Trivy then finds zero
+ * files and cannot even create its own report inside that empty mount, since `.trivy` (created on
+ * the agent moments earlier, see createDirectoryOrThrow above) never actually appeared there from
+ * the daemon's point of view.
+ *
+ * Matching is deliberately not on trivy's own sentence: that wording has already shifted across
+ * releases for the database-download case above, so keying on it here would be equally brittle.
+ * `containerReportPath` is this task's own literal, not trivy's, so it is far more stable, and
+ * requiring that report file be genuinely absent on the host guards against a coincidental
+ * mention of that path in an unrelated failure whose scan actually succeeded. "no such file or
+ * directory" is the OS's own ENOENT rendering, not a trivy phrasing, and is the same durable
+ * signal for the same reason. Both are required together, and confidence stays low without them:
+ * a wrong diagnosis here would send someone chasing a daemon mount problem that does not exist,
+ * which is worse than the generic message this falls through to when unsure.
+ */
+function isDaemonCannotSeeSourcesFailure(
+  config: ResolvedScanConfig,
+  scan: Pick<ProcessResult, 'stdout' | 'stderr'>,
+): boolean {
+  if (fs.existsSync(hostReportPath(config))) {
+    return false;
+  }
+  const output = `${scan.stderr}\n${scan.stdout}`;
+  return output.includes(containerReportPath(config)) && /no such file or directory/i.test(output);
+}
+
+function daemonCannotSeeSourcesMessage(
+  config: ResolvedScanConfig,
+  scan: Pick<ProcessResult, 'stdout' | 'stderr'>,
+): string {
+  return (
+    `Trivy could not create its report at ${containerReportPath(config)} inside the container. ` +
+    `This means the docker daemon could not see this agent's sources directory ` +
+    `("${config.sourcesDir}") when it mounted it into the container. ` +
+    '`docker run -v <sourcesDir>:/workspace` is resolved by the docker daemon, not by this task, ' +
+    'so this happens when the agent itself runs in a container and the daemon lives in a ' +
+    "different mount namespace -- a sidecar daemon, or the host's daemon reached through a " +
+    'mounted socket -- in which case the daemon cannot see the path and silently mounts an ' +
+    'empty directory instead. Check that the daemon and the agent see ' +
+    `"${config.sourcesDir}" identically: either the same volume mounted at the same mountPath ` +
+    "in both containers, or a host path mounted into the agent at that same location. " +
+    `Detail: ${scan.stderr.trim() || scan.stdout.trim()}`
   );
 }
 
@@ -291,6 +347,9 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
       }
       if (isDbDownloadFailure(scan)) {
         throw new ScanExecutionError(dbDownloadFailureMessage(config, trivyCredentials));
+      }
+      if (isDaemonCannotSeeSourcesFailure(config, scan)) {
+        throw new ScanExecutionError(daemonCannotSeeSourcesMessage(config, scan));
       }
       throw new ScanExecutionError(
         `docker exited with code ${scan.exitCode} while running ${config.runner.image}. ` +

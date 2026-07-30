@@ -231,6 +231,59 @@ settings. If reads fail with an authorization error, set the task's `configConne
 a "Generic" service connection whose token is the PAT described above; the task then reads the
 settings documents with that PAT instead of the job's OAuth token.
 
+### Running the agent itself in a container
+
+This task assumes a conventional build agent: a process on a VM or bare host, talking to a
+docker daemon that shares its view of the filesystem. That assumption breaks down when the agent
+itself runs in a container — for example a Kubernetes pod — with the docker daemon reached
+through a sidecar or a mounted host socket. In that setup the daemon and the agent can be in
+different mount namespaces, and the requirement is not optional: **the docker daemon must see the
+agent's sources directory at the same absolute path the agent uses**, because that is what a bind
+mount (`-v <sourcesDir>:/workspace`) means — the daemon resolves that path itself, not this task,
+so it has no way to translate it.
+
+When the daemon cannot see that path, it does not fail the mount outright — it silently
+substitutes an empty directory. The scan then fails with something like:
+
+```
+INFO  Number of language-specific files  num=0
+FATAL run error: report error: unable to write results: failed to create a file:
+      failed to create output file: open /workspace/.trivy/report-0.json: no such file or directory
+```
+
+Starting with this version, the task recognizes this specific shape — trivy could not create its
+report at the container path, and the report file never appeared on the host — and names the real
+cause instead of a generic "docker exited with code 1" message.
+
+One step settles whether this is what is happening, before or independent of trying a real scan:
+
+```yaml
+- bash: |
+    ls -la "$(Build.SourcesDirectory)" | head -5
+    docker run --rm -v "$(Build.SourcesDirectory)":/workspace alpine ls -la /workspace | head -5
+```
+
+If the first listing shows the checked-out repository and the second is empty, the daemon cannot
+see that path — confirmed independently of trivy or this task.
+
+The usual fixes, depending on how the daemon is reached:
+
+- **Sidecar daemon** (a separate container in the same pod): mount the same volume at the same
+  `mountPath` in both the agent container and the daemon container, so both see it at the same
+  absolute path.
+- **Host's daemon via a mounted socket** (`/var/run/docker.sock`): mount the same host path into
+  the agent container at that same location, so the path the agent passes to `-v` is one the host
+  daemon already recognizes.
+
+This task does not attempt to work around the mismatch itself (no path translation, no `docker
+cp`, no copying sources into a volume) — guessing at a host-to-daemon path mapping could produce a
+scan that silently runs against the wrong (or empty) directory, which is worse than failing
+loudly. Fixing the mount is an infrastructure decision for whoever administers the agent.
+
+Note this only affects **filesystem**, **repository**, and **config** scans, which all depend on
+mounting the sources directory into the container. An **image** scan pulls the image by
+reference and never mounts `sourcesDir`, so it is unaffected by this class of failure.
+
 ## Development
 
 ```bash
