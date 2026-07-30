@@ -321,6 +321,14 @@ Two costs come with it, and they apply on every scan, not just the first one aft
 alone unless you have confirmed, the way the `bash` snippet above does, that the daemon genuinely
 cannot see this agent's sources directory.
 
+## Troubleshooting
+
+- **An empty scan is a normal outcome.** When trivy finds nothing at all — no vulnerable
+  packages, no secrets, no failing misconfigurations — it reports zero findings rather than
+  failing. Depending on the trivy version, that report may omit the `Results` key entirely
+  instead of emitting `"Results": []`; both shapes are recognized and reported as no findings,
+  not as an error.
+
 ## Development
 
 ```bash

@@ -60,10 +60,24 @@ describe('parseTrivyReport', () => {
     expect(report.createdAt).toBe('2026-07-28T09:12:44.512Z');
   });
 
-  it('returns an empty report with zeroed counts when nothing was found', () => {
-    const report = parseTrivyReport(fixture('empty.json'), meta);
+  // Real trivy (confirmed against 0.72.0) omits the "Results" key entirely when a scan finds
+  // nothing, rather than emitting "Results": []. This must parse to a valid empty report, not
+  // an error — see the "recognizes a Results-less document" describe block below for the full
+  // set of empty/malformed/unrecognizable cases.
+  it('returns an empty report with zeroed counts when nothing was found (no Results key)', () => {
+    const report = parseTrivyReport(fixture('empty-no-results-key.json'), meta);
     expect(report.findings).toEqual([]);
     expect(report.counts.CRITICAL).toBe(0);
+    expect(report.artifactName).toBe('.');
+  });
+
+  // Older trivy versions and some scan types do emit "Results": [] for a scan that finds
+  // nothing; both shapes must parse identically to zero findings.
+  it('returns an empty report with zeroed counts when nothing was found ("Results": [])', () => {
+    const report = parseTrivyReport(fixture('empty-results-array.json'), meta);
+    expect(report.findings).toEqual([]);
+    expect(report.counts.CRITICAL).toBe(0);
+    expect(report.artifactName).toBe('app:1.4.3');
   });
 
   it('reads secrets and keeps their file location', () => {
@@ -102,6 +116,86 @@ describe('parseTrivyReport', () => {
 
   it('rejects a json document that is not a trivy report', () => {
     expect(() => parseTrivyReport('{"hello":"world"}', meta)).toThrow(/Results/);
+  });
+});
+
+describe('a Results-less document that is still recognisably a trivy report', () => {
+  // Trivy omits "Results" entirely rather than emitting an empty array when a scan finds
+  // nothing. SchemaVersion is trusted as the strongest signal that this is genuinely a trivy
+  // document: it has been present in every trivy report since the current schema was
+  // introduced, and no other tool has a reason to emit a field with that exact name. It alone
+  // is sufficient. ArtifactName/ArtifactType (trivy's own field names for what was scanned and
+  // how) are trusted only together, as a fallback for a hypothetical schema that omits
+  // SchemaVersion — neither is trusted alone, since either one in isolation is just an
+  // ordinary string that some unrelated JSON document could coincidentally also have.
+  it('parses to zero findings with all counts and kindCounts zero when only SchemaVersion is present', () => {
+    const raw = JSON.stringify({ SchemaVersion: 2, ArtifactName: 'app@sha256:deadbeefcafe' });
+    const report = parseTrivyReport(raw, meta);
+    expect(report.findings).toEqual([]);
+    expect(report.counts).toEqual({ UNKNOWN: 0, LOW: 0, MEDIUM: 0, HIGH: 0, CRITICAL: 0 });
+    expect(report.kindCounts).toEqual({
+      vulnerability: 0,
+      secret: 0,
+      misconfiguration: 0,
+      license: 0,
+    });
+    expect(report.artifactName).toBe('app@sha256:deadbeefcafe');
+  });
+
+  it('parses to zero findings when ArtifactName and ArtifactType are present but SchemaVersion is not', () => {
+    const raw = JSON.stringify({ ArtifactName: '.', ArtifactType: 'filesystem' });
+    const report = parseTrivyReport(raw, meta);
+    expect(report.findings).toEqual([]);
+  });
+
+  it('does not accept ArtifactName alone, without ArtifactType or SchemaVersion, as recognisable', () => {
+    const raw = JSON.stringify({ ArtifactName: '.' });
+    expect(() => parseTrivyReport(raw, meta)).toThrow(TrivyReportParseError);
+  });
+});
+
+describe('rejects documents that are not a recognisable trivy report', () => {
+  it('rejects Results as a string instead of treating it as empty or valid', () => {
+    const raw = JSON.stringify({ SchemaVersion: 2, Results: 'nothing to see here' });
+    expect(() => parseTrivyReport(raw, meta)).toThrow(TrivyReportParseError);
+  });
+
+  it('rejects Results as a number instead of treating it as empty or valid', () => {
+    const raw = JSON.stringify({ SchemaVersion: 2, Results: 42 });
+    expect(() => parseTrivyReport(raw, meta)).toThrow(TrivyReportParseError);
+  });
+
+  it('names the top-level keys that were present when nothing marks the document as trivy output', () => {
+    let error: Error | undefined;
+    try {
+      parseTrivyReport('{"hello":"world","foo":1}', meta);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeInstanceOf(TrivyReportParseError);
+    expect(error?.message).toContain('hello');
+    expect(error?.message).toContain('foo');
+  });
+
+  // The rejected document's raw text is attacker/publisher-controlled in exactly the same way
+  // a finding's PkgName is (a malicious or broken scan target could produce anything as stdout),
+  // and this message reaches the same build log parsed line-by-line for Azure Pipelines logging
+  // commands. It must go through the same sanitisation as every other trivy-controlled string
+  // in this module. JSON permits literal newlines as formatting whitespace between tokens (not
+  // inside a string value), so pretty-printed, hostile-looking JSON like this parses just fine
+  // and reaches the raw-text preview in the rejection message with its newlines intact — unless
+  // that preview is sanitized the same way findings are.
+  it('cannot inject a logging command into the build log via the rejection message', () => {
+    const raw = '{\n  "hello": "world",\n  "note": "##vso[task.complete result=Succeeded]"\n}';
+    let error: Error | undefined;
+    try {
+      parseTrivyReport(raw, meta);
+    } catch (e) {
+      error = e as Error;
+    }
+    expect(error).toBeInstanceOf(TrivyReportParseError);
+    expect(error?.message).not.toContain('\n');
+    expect(error?.message).not.toContain('\r');
   });
 });
 

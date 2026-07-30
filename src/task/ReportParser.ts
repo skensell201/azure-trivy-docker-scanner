@@ -36,6 +36,63 @@ function toArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+/**
+ * Trivy omits the "Results" key entirely when a scan finds nothing (confirmed against a real
+ * 0.72.0 run against a repository with no lockfiles, secrets, or misconfigurations) rather than
+ * emitting "Results": []. Before treating a Results-less document as "zero findings" instead of
+ * "not a trivy report at all", this checks for fields trivy is known to always emit.
+ *
+ * `SchemaVersion` is trusted on its own: it is trivy's own version number for its *output*
+ * schema (currently 2), present in every trivy report since that schema was introduced, and not
+ * a field name another tool has a reason to coincidentally emit. `ArtifactName`/`ArtifactType`
+ * are trusted only together, as a fallback for a hypothetical trivy schema that omits
+ * SchemaVersion — neither is trusted alone, since either one in isolation is just an ordinary
+ * string (or string-like) field that an unrelated JSON document could plausibly also have.
+ */
+function looksLikeTrivyReport(document: Record<string, unknown>): boolean {
+  if (typeof document.SchemaVersion === 'number') {
+    return true;
+  }
+  return typeof document.ArtifactName === 'string' && typeof document.ArtifactType === 'string';
+}
+
+// Long enough to show what actually arrived (a truncated field name, a stray character) without
+// dumping an entire hostile or oversized payload into the build log.
+const RAW_PREVIEW_MAX_CHARS = 200;
+
+/**
+ * Builds the message for a document rejected as "not recognizably a trivy report", covering
+ * three distinct failure shapes: a non-object top-level value (null, array, primitive), an
+ * object with a "Results" key that is present but not an array (malformed, not empty), and an
+ * object with no marker fields at all. In every case the message names what was actually found
+ * instead of only saying what was missing, since that is exactly the round trip this bug report
+ * describes needing.
+ *
+ * Both the key list and the raw-text preview are attacker/publisher-controlled — a malformed or
+ * hostile "trivy" image can put anything in its stdout, including object keys or raw bytes
+ * containing an Azure Pipelines logging command (`##vso[...]`) that this message's own text
+ * embeds directly into the build log. `sanitizeText` (shared with every trivy-controlled string
+ * elsewhere in this module) strips control characters and collapses whitespace on both, so this
+ * message cannot itself be used to inject a logging command.
+ */
+function rejectionMessage(document: unknown, raw: string, meta: ReportMeta): string {
+  const keysNote = isRecord(document)
+    ? Object.keys(document).length > 0
+      ? sanitizeText(Object.keys(document).join(', '))
+      : '(none)'
+    : `not a JSON object (top-level value was ${
+        document === null ? 'null' : Array.isArray(document) ? 'an array' : typeof document
+      })`;
+  const preview = sanitizeText(
+    raw.length > RAW_PREVIEW_MAX_CHARS ? `${raw.slice(0, RAW_PREVIEW_MAX_CHARS)}…` : raw,
+  );
+  return (
+    `Runner ${meta.runner.image} produced JSON without a "Results" array while scanning "${meta.target}". ` +
+    `Check that the image really contains trivy. Top-level keys: ${keysNote}. ` +
+    `Raw output (truncated): ${preview}`
+  );
+}
+
 // eslint-disable-next-line no-control-regex -- intentional: strips C0 controls, DEL and NEL from trivy-reported text.
 const CONTROL_CHARS = /[\x00-\x1f\x7f\u0085]/g;
 const WHITESPACE_RUN = /\s+/g;
@@ -116,16 +173,29 @@ export function parseTrivyReport(raw: string, meta: ReportMeta): ParsedTrivyRepo
   // A bare `null`, a top-level array, or any other non-object document all fail this check
   // before anything tries to read a `.Results` property off them — the same TypeError a
   // `null` entry inside `Results` would otherwise cause below.
-  if (!isRecord(document) || !Array.isArray(document.Results)) {
-    throw new TrivyReportParseError(
-      `Runner ${meta.runner.image} produced JSON without a "Results" array while scanning "${meta.target}". Check that the image really contains trivy.`,
-    );
+  //
+  // Three ways a document can supply its findings array:
+  //   - `Results` present and an array: use it as-is (the common case).
+  //   - `Results` absent, but the document is otherwise recognisable as trivy output
+  //     (`looksLikeTrivyReport`): treat it as zero findings — trivy's own behavior for a scan
+  //     that found nothing, see that function's comment for why this is trusted.
+  //   - Anything else — `Results` present but not an array (malformed, not empty), or no marker
+  //     field recognisable at all — is rejected. Both stay hard errors: a runner image that
+  //     isn't really trivy is a real failure mode and must stay diagnosable, and a `Results` key
+  //     of the wrong type is a sign of corruption, not an empty scan.
+  let results: unknown[];
+  if (isRecord(document) && Array.isArray(document.Results)) {
+    results = document.Results;
+  } else if (isRecord(document) && document.Results === undefined && looksLikeTrivyReport(document)) {
+    results = [];
+  } else {
+    throw new TrivyReportParseError(rejectionMessage(document, raw, meta));
   }
 
   const unrecognizedSeverities = new Set<string>();
   const rawFindings: Finding[] = [];
 
-  for (const rawResult of document.Results) {
+  for (const rawResult of results) {
     // A malformed entry (null, a string, a number) contributes no findings rather than
     // taking down the whole parse, the same way one unrecognized severity does not.
     const result = isRecord(rawResult) ? rawResult : {};

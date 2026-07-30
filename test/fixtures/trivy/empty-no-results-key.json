@@ -1,0 +1,15 @@
+{
+  "SchemaVersion": 2,
+  "CreatedAt": "2026-07-28T09:20:01.004Z",
+  "ArtifactName": ".",
+  "ArtifactType": "filesystem",
+  "Metadata": {
+    "ImageConfig": {
+      "architecture": "",
+      "created": "0001-01-01T00:00:00Z",
+      "os": "",
+      "rootfs": { "type": "", "diff_ids": null },
+      "config": {}
+    }
+  }
+}
