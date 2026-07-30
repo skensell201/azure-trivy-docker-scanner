@@ -386,6 +386,21 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   );
   const timeoutMs = config.timeoutMinutes * 60_000 + 30_000;
 
+  // Wall-clock bounds of the scan invocation itself, for the JUnit `<testsuite>` this run may
+  // publish below (see buildJUnitXml's own timestamp/durationSeconds doc comments for why that
+  // module cannot read the clock itself). `scanStartedAt` is the fallback timestamp -- used only
+  // when trivy's own report carries no `createdAt` -- and `scanDurationSeconds` has no fallback:
+  // it stays 0 (an honest "unmeasured", not a fabricated number) unless the scan below actually
+  // runs to completion. Assigned around `runContainerized` specifically, not the wider try block,
+  // because that one call is what covers *both* transports (`mount` and `copy` -- see
+  // runContainerized's own doc comment): it alone is "the scan invocation", not the version probe
+  // before it or the sarif/sbom extra-format runs after it. Declared here (rather than with a
+  // `let ... = new Date()` immediately before the assignment below) only because TypeScript
+  // requires every `let` to be initialized or explicitly typed before the try/catch below can
+  // read it in the finally-adjacent code further down.
+  let scanStartedAt: Date;
+  let scanDurationSeconds = 0;
+
   try {
     // buildScanArgs always requests `--format json --output <path>`: the gate
     // (evaluateGate below) and the normalized-report attachment both depend on parsing
@@ -393,6 +408,8 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     // `formats` therefore only selects which *additional* outputs (the table log, sarif)
     // are produced alongside it -- listing or omitting 'json' in `formats` has no effect,
     // by design.
+    scanStartedAt = new Date();
+    const scanStartedAtMs = Date.now();
     const scan = await runContainerized(
       config,
       processRunner,
@@ -402,6 +419,7 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
       hostReportPath(config),
       { timeoutMs, onStdout: (chunk) => process.stdout.write(chunk) },
     );
+    scanDurationSeconds = (Date.now() - scanStartedAtMs) / 1000;
 
     if (scan.timedOut) {
       // In copy mode runContainerized's own `finally` already removed the container (it
@@ -549,8 +567,16 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
     // not fail because of it.
     const junitPath = path.join(config.sourcesDir, '.trivy', `junit-${config.scanIndex}.xml`);
     const runTitle = `Trivy - ${report.artifactName}`;
+    // Trivy's own report.createdAt (when present) is closer to the truth than this process's
+    // clock -- it is stamped at the moment trivy itself ran, inside the container -- so it wins
+    // over scanStartedAt, which is only this task's own before/after bracket around the docker
+    // invocation and is used solely as a fallback for older trivy versions that omit CreatedAt.
+    const timestamp = report.createdAt ?? scanStartedAt.toISOString();
     try {
-      fs.writeFileSync(junitPath, buildJUnitXml(report, { suiteName: runTitle }));
+      fs.writeFileSync(
+        junitPath,
+        buildJUnitXml(report, { suiteName: runTitle, timestamp, durationSeconds: scanDurationSeconds }),
+      );
       publisher.publishJUnit(junitPath, runTitle);
     } catch (error) {
       publisher.warn(

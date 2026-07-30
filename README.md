@@ -347,6 +347,11 @@ installed and fixed versions, and the title; the longer detail (target, location
 sits in the failure body. A clean scan still publishes one run, with a single synthetic passing
 test case rather than an empty (and easily mistaken for broken) test run.
 
+The **Run duration** shown for that run in the Tests tab is the trivy scan's own duration (the
+time the docker invocation actually took), not a per-test or per-finding time — JUnit has no
+meaningful notion of the latter for a report converted from a single already-parsed scan, so
+every `<testcase>` carries `time="0"` and only the `<testsuite>` carries the real number.
+
 **Every finding becomes a *failed* test case — this is the point, not a bug.** A pipeline whose
 gate passes (the findings are all below `failOn`, or the gate is disabled with `failOn: none`)
 will still show red in the Tests tab once this is on: the gate and the Tests tab answer different

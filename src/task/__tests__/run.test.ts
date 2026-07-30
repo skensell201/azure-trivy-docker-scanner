@@ -335,6 +335,104 @@ describe('runScan', () => {
       });
       expect(lines.some((line) => line.includes('results.publish'))).toBe(false);
     });
+
+    /**
+     * Pulls one attribute off the `<testsuite ...>` opening tag by name, without a full XML
+     * parser: run.test.ts has no jsdom/DOMParser dependency the way JUnitReport.test.ts does
+     * (that file owns the well-formedness assertions), so this stays a plain regex, good enough
+     * to pin which value run.ts chose to pass through into the file it wrote.
+     */
+    const testsuiteAttr = (xml: string, name: string): string | undefined =>
+      xml.match(new RegExp(`<testsuite[^>]*\\s${name}="([^"]*)"`))?.[1];
+
+    // This is the crux of the duration fix: real wall-clock time in a test cannot be pinned to
+    // an exact value without a fake-timer dependency this suite deliberately avoids (see the
+    // task notes this pins), so "a valid, non-negative number" is the honest, deterministic
+    // thing to assert -- it is what tells apart the actual measurement this change adds from the
+    // hardcoded `time="0"` the defect report was filed against.
+    it('publishes a non-negative, numeric duration on the testsuite element', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners,
+        inputs: { ...inputs, publishTestResults: true },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      const hostPath = attachedPath((l) => l.includes('results.publish'));
+      const xml = fs.readFileSync(hostPath, 'utf8');
+      const time = Number(testsuiteAttr(xml, 'time'));
+
+      expect(Number.isNaN(time)).toBe(false);
+      expect(time).toBeGreaterThanOrEqual(0);
+    });
+
+    // Falls back to when the scan started (a real Date, ISO-formatted) only because this
+    // fixture's report carries no CreatedAt of its own -- see the next test for the case where
+    // trivy does provide one.
+    it('falls back to a valid ISO timestamp for the testsuite when trivy reports no createdAt', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults,
+        runners,
+        inputs: { ...inputs, publishTestResults: true },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      const hostPath = attachedPath((l) => l.includes('results.publish'));
+      const xml = fs.readFileSync(hostPath, 'utf8');
+      const timestamp = testsuiteAttr(xml, 'timestamp');
+
+      expect(timestamp).toBeDefined();
+      expect(Number.isNaN(new Date(timestamp as string).getTime())).toBe(false);
+    });
+
+    // The crux of the timestamp fix: trivy's own report.createdAt, when present, is closer to
+    // the truth than this task's own before/after bracket around the docker invocation, so it
+    // must win over the measured scan-start time.
+    it("uses trivy's own createdAt as the testsuite timestamp when the report carries one", async () => {
+      const runner = new FakeRunner(() => {
+        fs.mkdirSync(path.join(workspace, '.trivy'), { recursive: true });
+        fs.writeFileSync(
+          path.join(workspace, '.trivy', 'report-0.json'),
+          JSON.stringify({
+            SchemaVersion: 2,
+            CreatedAt: '2026-01-02T03:04:05Z',
+            ArtifactName: 'app:1.4.2',
+            Results: [
+              {
+                Target: 'app:1.4.2',
+                Vulnerabilities: [
+                  { VulnerabilityID: 'CVE-1', PkgName: 'runc', Severity: 'CRITICAL', Title: 'escape' },
+                ],
+              },
+            ],
+          }),
+        );
+      });
+      await runScan({
+        defaults,
+        runners,
+        inputs: { ...inputs, publishTestResults: true },
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      const hostPath = attachedPath((l) => l.includes('results.publish'));
+      const xml = fs.readFileSync(hostPath, 'utf8');
+      expect(testsuiteAttr(xml, 'timestamp')).toBe('2026-01-02T03:04:05Z');
+    });
   });
 
   it('deletes the env file even when the scan fails', async () => {

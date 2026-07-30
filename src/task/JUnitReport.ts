@@ -5,6 +5,28 @@ export interface JUnitReportOptions {
    * run.ts, the `results.publish` run title too. Sanitized and escaped the same as every
    * other value here, since it can carry `report.artifactName` (what trivy actually scanned). */
   suiteName: string;
+  /**
+   * ISO 8601 string for the `<testsuite timestamp="...">` attribute. This module stays pure and
+   * never reads the clock itself (a function whose output depends on wall-clock time is a
+   * function that fails at midnight, and cannot be pinned in a byte-identical-output test) - the
+   * caller (run.ts) is responsible for deciding what moment this represents, e.g. trivy's own
+   * `report.createdAt` when present, falling back to when it started the scan otherwise.
+   *
+   * Format: a full ISO instant (e.g. `2026-07-29T12:34:56.000Z`), not JUnit's other common
+   * convention of local-time-without-zone. Nothing in this repository or its installed packages
+   * (the `results.publish` timestamp is consumed entirely by the Azure Pipelines agent, which
+   * ships in no local package here) pins down which of the two the Azure DevOps publisher
+   * actually tolerates, so this is a documented assumption, not a verified fact - if a future
+   * run again logs "Timestamp is not available" despite this attribute being present, that
+   * format choice is the first thing to revisit.
+   */
+  timestamp: string;
+  /**
+   * Seconds for the `<testsuite time="...">` attribute - what fixes the `Run duration 0s` defect.
+   * The caller measures this (wall-clock time actually spent on the scan invocation); this
+   * module only ever places the number it is given.
+   */
+  durationSeconds: number;
 }
 
 /**
@@ -127,6 +149,11 @@ function buildTestCase(finding: Finding): string {
   // double-escape every entity it just produced (e.g. "&lt;" becoming "&amp;lt;").
   const detail = failureDetail(finding);
 
+  // Deliberately hardcoded, not a share of the suite's durationSeconds: trivy reports every
+  // finding from a single parsed JSON document, not from an individually-timed check, so there
+  // is no real per-finding duration to distribute - splitting the suite total across testcases
+  // would manufacture a precision this task never measured. The suite-level `time` (see
+  // buildJUnitXml below) is the honest number; this one stays 0 for every testcase.
   return (
     `  <testcase name="${name}" classname="${classname}" time="0">\n` +
     `    <failure message="${message}">${detail}</failure>\n` +
@@ -148,12 +175,17 @@ function buildTestCase(finding: Finding): string {
  */
 export function buildJUnitXml(report: NormalizedReport, options: JUnitReportOptions): string {
   const suiteName = xmlSafe(options.suiteName);
+  // xmlSafe here for the same reason as every other field in this module: run.ts may pass
+  // trivy's own report.createdAt through unchanged, and that is attacker/publisher-controlled
+  // text (same trust boundary as artifactName), not a value this module minted itself.
+  const timestamp = xmlSafe(options.timestamp);
+  const time = options.durationSeconds;
   const findings = report.findings;
 
   if (findings.length === 0) {
     return (
       '<?xml version="1.0" encoding="UTF-8"?>\n' +
-      `<testsuite name="${suiteName}" tests="1" failures="0" time="0">\n` +
+      `<testsuite name="${suiteName}" tests="1" failures="0" time="${time}" timestamp="${timestamp}">\n` +
       `  <testcase name="No findings" classname="${suiteName}" time="0"/>\n` +
       '</testsuite>\n'
     );
@@ -162,7 +194,7 @@ export function buildJUnitXml(report: NormalizedReport, options: JUnitReportOpti
   const testcases = findings.map(buildTestCase).join('');
   return (
     '<?xml version="1.0" encoding="UTF-8"?>\n' +
-    `<testsuite name="${suiteName}" tests="${findings.length}" failures="${findings.length}" time="0">\n` +
+    `<testsuite name="${suiteName}" tests="${findings.length}" failures="${findings.length}" time="${time}" timestamp="${timestamp}">\n` +
     testcases +
     '</testsuite>\n'
   );
