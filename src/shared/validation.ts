@@ -128,7 +128,7 @@ export function validateRunner(runner: unknown): ValidationIssue[] {
       if (!hasTag) {
         issues.push({
           field: 'image',
-          message: 'Image must carry an explicit tag, for example reg.corp/trivy:0.58.1.',
+          message: 'Image must carry an explicit tag, for example registry.example.com/trivy:0.58.1.',
         });
       } else {
         const tag = image.slice(tagSeparator + 1);

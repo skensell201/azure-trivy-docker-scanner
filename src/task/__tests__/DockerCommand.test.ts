@@ -13,7 +13,7 @@ import {
 import { ResolvedScanConfig } from '../../shared/types';
 
 const config = (over: Partial<ResolvedScanConfig> = {}): ResolvedScanConfig => ({
-  runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' },
+  runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' },
   scanType: 'image',
   target: 'app:1.4.2',
   severities: ['CRITICAL', 'HIGH'],
@@ -22,7 +22,7 @@ const config = (over: Partial<ResolvedScanConfig> = {}): ResolvedScanConfig => (
   ignoreUnfixed: false,
   skipDbUpdate: false,
   timeoutMinutes: 10,
-  dbRepository: 'reg.corp/trivy-db:2',
+  dbRepository: 'registry.example.com/trivy-db:2',
   cacheDir: '/agent/_trivy-cache',
   sourcesDir: '/agent/_work/1/s',
   useDockerSocket: false,
@@ -50,7 +50,7 @@ describe('buildScanArgs', () => {
       '/agent/_work/1/s:/workspace',
       '-w',
       '/workspace',
-      'reg.corp/trivy:0.58.1',
+      'registry.example.com/trivy:0.58.1',
       'image',
       '--format',
       'json',
@@ -91,12 +91,12 @@ describe('buildScanArgs', () => {
   it('inserts extra docker args before the image and extra trivy args after the flags', () => {
     const args = buildScanArgs(
       config({
-        runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', extraDockerArgs: '--network none' },
+        runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', extraDockerArgs: '--network none' },
         extraTrivyArgs: '--offline-scan',
       }),
       '/tmp/e',
     );
-    expect(args.indexOf('--network')).toBeLessThan(args.indexOf('reg.corp/trivy:0.58.1'));
+    expect(args.indexOf('--network')).toBeLessThan(args.indexOf('registry.example.com/trivy:0.58.1'));
     expect(args.indexOf('--offline-scan')).toBeGreaterThan(args.indexOf('--timeout'));
     expect(args[args.length - 1]).toBe('app:1.4.2');
   });
@@ -109,7 +109,7 @@ describe('buildScanArgs', () => {
   it('passes extraDockerArgs through unrestricted, since it is administrator-only', () => {
     const args = buildScanArgs(
       config({
-        runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', extraDockerArgs: '--privileged' },
+        runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', extraDockerArgs: '--privileged' },
       }),
       '/tmp/e',
     );
@@ -262,7 +262,7 @@ describe('buildVersionArgs', () => {
       '--rm',
       '-v',
       '/agent/_trivy-cache:/root/.cache/trivy',
-      'reg.corp/trivy:0.58.1',
+      'registry.example.com/trivy:0.58.1',
       'version',
       '--format',
       'json',
@@ -273,7 +273,7 @@ describe('buildVersionArgs', () => {
 describe('buildTrivyEnv', () => {
   it('points trivy at the internal database mirror and cache', () => {
     expect(buildTrivyEnv(config(), {})).toMatchObject({
-      TRIVY_DB_REPOSITORY: 'reg.corp/trivy-db:2',
+      TRIVY_DB_REPOSITORY: 'registry.example.com/trivy-db:2',
       TRIVY_CACHE_DIR: '/root/.cache/trivy',
       TRIVY_NO_PROGRESS: 'true',
     });
@@ -282,8 +282,8 @@ describe('buildTrivyEnv', () => {
   it('includes the java database mirror only when configured', () => {
     expect(buildTrivyEnv(config(), {})).not.toHaveProperty('TRIVY_JAVA_DB_REPOSITORY');
     expect(
-      buildTrivyEnv(config({ javaDbRepository: 'reg.corp/trivy-java-db:1' }), {}),
-    ).toMatchObject({ TRIVY_JAVA_DB_REPOSITORY: 'reg.corp/trivy-java-db:1' });
+      buildTrivyEnv(config({ javaDbRepository: 'registry.example.com/trivy-java-db:1' }), {}),
+    ).toMatchObject({ TRIVY_JAVA_DB_REPOSITORY: 'registry.example.com/trivy-java-db:1' });
   });
 
   it('carries registry credentials for the scanned image', () => {
@@ -306,11 +306,11 @@ describe('buildTrivyEnv', () => {
 
 describe('registryHostFromImage', () => {
   it('uses the first path segment as the host when it contains a dot', () => {
-    expect(registryHostFromImage('reg.corp/trivy:0.58.1')).toBe('reg.corp');
+    expect(registryHostFromImage('registry.example.com/trivy:0.58.1')).toBe('registry.example.com');
   });
 
   it('uses the first path segment as the host when it contains a port (colon)', () => {
-    expect(registryHostFromImage('reg.corp:5000/trivy:0.58.1')).toBe('reg.corp:5000');
+    expect(registryHostFromImage('registry.example.com:5000/trivy:0.58.1')).toBe('registry.example.com:5000');
   });
 
   it('falls back to Docker Hub for a bare image name with no registry segment', () => {
@@ -322,15 +322,15 @@ describe('registryHostFromImage', () => {
   });
 
   it('handles a digest reference the same way as a tagged one', () => {
-    expect(registryHostFromImage(`reg.corp/trivy@sha256:${'a'.repeat(64)}`)).toBe('reg.corp');
+    expect(registryHostFromImage(`registry.example.com/trivy@sha256:${'a'.repeat(64)}`)).toBe('registry.example.com');
   });
 });
 
 describe('buildLoginArgs', () => {
   it('builds a docker login command for the host and username, reading the password from stdin', () => {
-    expect(buildLoginArgs('reg.corp', 'svc')).toEqual([
+    expect(buildLoginArgs('registry.example.com', 'svc')).toEqual([
       'login',
-      'reg.corp',
+      'registry.example.com',
       '--username',
       'svc',
       '--password-stdin',
@@ -338,7 +338,7 @@ describe('buildLoginArgs', () => {
   });
 
   it('never places the password in the argv it returns', () => {
-    const args = buildLoginArgs('reg.corp', 'svc');
+    const args = buildLoginArgs('registry.example.com', 'svc');
     expect(args.join(' ')).not.toMatch(/p@ss|password(?!-stdin)/i);
   });
 });

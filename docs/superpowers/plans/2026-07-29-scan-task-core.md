@@ -177,14 +177,14 @@ git commit -m "chore: typescript, jest and lint toolchain"
 С машины с доступом к серверу, подставив свой PAT и URL коллекции:
 
 ```bash
-export ADO="https://ado.corp/DefaultCollection"
+export ADO="https://dev.example.com/DefaultCollection"
 export PAT="<pat-with-extension-data-scope>"
 export PUB="iksoftware"; export EXT="trivy-docker-scanner"
 
 curl -sS -u ":$PAT" -X PUT \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents?api-version=3.2-preview.1" \
   -H 'Content-Type: application/json' \
-  -d '{"id":"runners","__etag":-1,"value":[{"alias":"baseline","image":"reg.corp/trivy:0.58.1","isDefault":true,"enabled":true}]}'
+  -d '{"id":"runners","__etag":-1,"value":[{"alias":"baseline","image":"registry.example.com/trivy:0.58.1","isDefault":true,"enabled":true}]}'
 ```
 
 Ожидается: 200 и тело документа с непустым `__etag`.
@@ -659,14 +659,14 @@ import { DefaultsConfig, RunnerConfig } from '../types';
 
 const runner = (over: Partial<RunnerConfig> = {}): RunnerConfig => ({
   alias: 'baseline',
-  image: 'reg.corp/trivy:0.58.1',
+  image: 'registry.example.com/trivy:0.58.1',
   isDefault: true,
   enabled: true,
   ...over,
 });
 
 const defaults = (over: Partial<DefaultsConfig> = {}): DefaultsConfig => ({
-  dbRepository: 'reg.corp/trivy-db:2',
+  dbRepository: 'registry.example.com/trivy-db:2',
   ...over,
 });
 
@@ -686,12 +686,12 @@ describe('validateRunner', () => {
   });
 
   it('requires an explicit tag on the image', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp/trivy' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com/trivy' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('tag') }]);
   });
 
   it('rejects the latest tag because it is not reproducible', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp/trivy:latest' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com/trivy:latest' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('latest') }]);
   });
 
@@ -792,7 +792,7 @@ export function validateRunner(runner: RunnerConfig): ValidationIssue[] {
     if (!hasTag) {
       issues.push({
         field: 'image',
-        message: 'Image must carry an explicit tag, for example reg.corp/trivy:0.58.1.',
+        message: 'Image must carry an explicit tag, for example registry.example.com/trivy:0.58.1.',
       });
     } else if (image.slice(tagSeparator + 1) === 'latest') {
       issues.push({
@@ -887,11 +887,11 @@ git commit -m "feat: shared validation rules for runners and defaults"
 - все три функции принимают `unknown` вместо объявленных типов — это честная сигнатура для кода, чья работа и состоит в проверке недоверенной формы (со старой сигнатурой тесты на испорченный вход просто не компилировались). Возвращаемый тип и форма `ValidationIssue` не меняются;
 - каждая из трёх функций начинается с проверки формы: не массив → одна проблема на поле `runners`; не объект → проблема на поле `runner`/`defaults`; элемент каталога не объект → проблема с указанием индекса;
 - значения не того типа не проходят молча: `timeoutMinutes` проверяется через `typeof === 'number' && Number.isFinite && > 0` (иначе `NaN` уезжает в докер-команду), `severities` и `scanners` — через `Array.isArray` (иначе строка `'HIGH'` считается непустым списком), `alias`, `image`, `dbRepository` — через `typeof === 'string'`;
-- тег образа проверяется шаблоном `^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`, иначе проходят `reg.corp/trivy:` и `reg.corp/trivy:0.58.1 --privileged`. Ссылки по digest (`@sha256:...`) распознаются отдельно и принимаются намеренно: digest — самая воспроизводимая ссылка из возможных, отвергать её было бы ровно наоборот;
+- тег образа проверяется шаблоном `^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$`, иначе проходят `registry.example.com/trivy:` и `registry.example.com/trivy:0.58.1 --privileged`. Ссылки по digest (`@sha256:...`) распознаются отдельно и принимаются намеренно: digest — самая воспроизводимая ссылка из возможных, отвергать её было бы ровно наоборот;
 - сообщения дедуплицируются (один и тот же дублирующийся alias сообщается один раз), а сообщение про раннер по умолчанию называет виновников: `found 2: "baseline", "hardened"`;
 - на `validateCatalog` вешается док-комментарий о том, что он проверяет только межраннерные инварианты: сейчас каталог из одного раннера с плохим alias и тегом `latest` получает от него чистый вердикт, и ничто не подсказывает вызывающему, что нужно ещё пройтись `validateRunner` по элементам.
 
-Тесты, которых не хватало (мутационное тестирование показало, что без них правки реализации проходят весь набор): отказ на пустом `scanners` — единственное правило `validateDefaults`, не покрытое вообще; принятие раннера с опущенным `enabled` (в `types.ts` задокументировано, что отсутствие означает «включён»); границы длины alias — 2 и 32 символа; приём `reg.corp/latest-trivy:0.58.1`, чтобы правило про `latest` смотрело на тег, а не на подстроку имени; и три формы digest-ссылок.
+Тесты, которых не хватало (мутационное тестирование показало, что без них правки реализации проходят весь набор): отказ на пустом `scanners` — единственное правило `validateDefaults`, не покрытое вообще; принятие раннера с опущенным `enabled` (в `types.ts` задокументировано, что отсутствие означает «включён»); границы длины alias — 2 и 32 символа; приём `registry.example.com/latest-trivy:0.58.1`, чтобы правило про `latest` смотрело на тег, а не на подстроку имени; и три формы digest-ссылок.
 
 ---
 
@@ -908,12 +908,12 @@ import { resolveConfig, PolicyViolationError, RunnerNotFoundError } from '../Con
 import { AgentContext, DefaultsConfig, RunnerConfig, TaskInputs } from '../../shared/types';
 
 const runners: RunnerConfig[] = [
-  { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
-  { alias: 'hardened', image: 'reg.corp/trivy-fips:0.58.1', enabled: true },
-  { alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: false },
+  { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+  { alias: 'hardened', image: 'registry.example.com/trivy-fips:0.58.1', enabled: true },
+  { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false },
 ];
 
-const defaults: DefaultsConfig = { dbRepository: 'reg.corp/trivy-db:2' };
+const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
 
 const agent: AgentContext = {
   sourcesDir: '/agent/_work/1/s',
@@ -1184,7 +1184,7 @@ import {
 import { ResolvedScanConfig } from '../../shared/types';
 
 const config = (over: Partial<ResolvedScanConfig> = {}): ResolvedScanConfig => ({
-  runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' },
+  runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' },
   scanType: 'image',
   target: 'app:1.4.2',
   severities: ['CRITICAL', 'HIGH'],
@@ -1193,7 +1193,7 @@ const config = (over: Partial<ResolvedScanConfig> = {}): ResolvedScanConfig => (
   ignoreUnfixed: false,
   skipDbUpdate: false,
   timeoutMinutes: 10,
-  dbRepository: 'reg.corp/trivy-db:2',
+  dbRepository: 'registry.example.com/trivy-db:2',
   cacheDir: '/agent/_trivy-cache',
   sourcesDir: '/agent/_work/1/s',
   useDockerSocket: false,
@@ -1221,7 +1221,7 @@ describe('buildScanArgs', () => {
       '/agent/_work/1/s:/workspace',
       '-w',
       '/workspace',
-      'reg.corp/trivy:0.58.1',
+      'registry.example.com/trivy:0.58.1',
       'image',
       '--format',
       'json',
@@ -1254,12 +1254,12 @@ describe('buildScanArgs', () => {
   it('inserts extra docker args before the image and extra trivy args after the flags', () => {
     const args = buildScanArgs(
       config({
-        runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', extraDockerArgs: '--network none' },
+        runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', extraDockerArgs: '--network none' },
         extraTrivyArgs: '--offline-scan',
       }),
       '/tmp/e',
     );
-    expect(args.indexOf('--network')).toBeLessThan(args.indexOf('reg.corp/trivy:0.58.1'));
+    expect(args.indexOf('--network')).toBeLessThan(args.indexOf('registry.example.com/trivy:0.58.1'));
     expect(args.indexOf('--offline-scan')).toBeGreaterThan(args.indexOf('--timeout'));
     expect(args[args.length - 1]).toBe('app:1.4.2');
   });
@@ -1298,7 +1298,7 @@ describe('buildVersionArgs', () => {
       '--rm',
       '-v',
       '/agent/_trivy-cache:/root/.cache/trivy',
-      'reg.corp/trivy:0.58.1',
+      'registry.example.com/trivy:0.58.1',
       'version',
       '--format',
       'json',
@@ -1309,7 +1309,7 @@ describe('buildVersionArgs', () => {
 describe('buildTrivyEnv', () => {
   it('points trivy at the internal database mirror and cache', () => {
     expect(buildTrivyEnv(config(), {})).toMatchObject({
-      TRIVY_DB_REPOSITORY: 'reg.corp/trivy-db:2',
+      TRIVY_DB_REPOSITORY: 'registry.example.com/trivy-db:2',
       TRIVY_CACHE_DIR: '/root/.cache/trivy',
       TRIVY_NO_PROGRESS: 'true',
     });
@@ -1318,8 +1318,8 @@ describe('buildTrivyEnv', () => {
   it('includes the java database mirror only when configured', () => {
     expect(buildTrivyEnv(config(), {})).not.toHaveProperty('TRIVY_JAVA_DB_REPOSITORY');
     expect(
-      buildTrivyEnv(config({ javaDbRepository: 'reg.corp/trivy-java-db:1' }), {}),
-    ).toMatchObject({ TRIVY_JAVA_DB_REPOSITORY: 'reg.corp/trivy-java-db:1' });
+      buildTrivyEnv(config({ javaDbRepository: 'registry.example.com/trivy-java-db:1' }), {}),
+    ).toMatchObject({ TRIVY_JAVA_DB_REPOSITORY: 'registry.example.com/trivy-java-db:1' });
   });
 
   it('carries registry credentials for the scanned image', () => {
@@ -1604,7 +1604,7 @@ git commit -m "feat: owner-only env file for trivy secrets"
 - Create: `src/task/ReportParser.ts`
 - Test: `src/task/__tests__/ReportParser.test.ts`
 
-Фикстуры ниже соответствуют схеме trivy `SchemaVersion: 2`. Когда появится доступ к раннеру, перегенерируйте их реальным запуском (`docker run --rm reg.corp/trivy:0.58.1 image --format json alpine:3.19`) и убедитесь, что тесты по-прежнему проходят — это и есть проверка, что мы читаем настоящий формат.
+Фикстуры ниже соответствуют схеме trivy `SchemaVersion: 2`. Когда появится доступ к раннеру, перегенерируйте их реальным запуском (`docker run --rm registry.example.com/trivy:0.58.1 image --format json alpine:3.19`) и убедитесь, что тесты по-прежнему проходят — это и есть проверка, что мы читаем настоящий формат.
 
 - [ ] **Step 1: Создать `test/fixtures/trivy/image-vulns.json`**
 
@@ -1740,7 +1740,7 @@ import { parseTrivyReport, parseVersion, TrivyReportParseError } from '../Report
 const fixture = (name: string): string =>
   fs.readFileSync(path.join(__dirname, '../../../test/fixtures/trivy', name), 'utf8');
 
-const meta = { scanType: 'image' as const, target: 'app:1.4.2', runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' } };
+const meta = { scanType: 'image' as const, target: 'app:1.4.2', runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' } };
 
 describe('parseTrivyReport', () => {
   it('flattens vulnerabilities from every result into findings', () => {
@@ -1816,7 +1816,7 @@ describe('parseTrivyReport', () => {
 
   it('rejects malformed json with the runner and target in the message', () => {
     expect(() => parseTrivyReport('{not json', meta)).toThrow(TrivyReportParseError);
-    expect(() => parseTrivyReport('{not json', meta)).toThrow(/reg.corp\/trivy:0.58.1/);
+    expect(() => parseTrivyReport('{not json', meta)).toThrow(/registry.example.com\/trivy:0.58.1/);
   });
 
   it('rejects a json document that is not a trivy report', () => {
@@ -2062,7 +2062,7 @@ const report = (findings: Finding[]): NormalizedReport => {
     scanType: 'image',
     target: 'app:1.4.2',
     artifactName: 'app:1.4.2',
-    runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' },
+    runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' },
     findings,
     counts,
     kindCounts: { vulnerability: findings.length, secret: 0, misconfiguration: 0, license: 0 },
@@ -2366,7 +2366,7 @@ describe('ConfigClient', () => {
   it('requests the document from the extension data collection', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([{ alias: 'baseline' }]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection/',
+      collectionUri: 'https://dev.example.com/DefaultCollection/',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -2377,7 +2377,7 @@ describe('ConfigClient', () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      'https://ado.corp/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1',
+      'https://dev.example.com/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1',
     );
     expect(init.headers.Authorization).toBe('Bearer tok');
   });
@@ -2385,7 +2385,7 @@ describe('ConfigClient', () => {
   it('sends basic auth when configured for a personal access token', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'pat', token: 'mypat' },
@@ -2401,7 +2401,7 @@ describe('ConfigClient', () => {
   it('returns the value field of the document', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([{ alias: 'baseline' }]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -2414,7 +2414,7 @@ describe('ConfigClient', () => {
   it('returns undefined when the document does not exist yet', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 404, text: async () => '' });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -2427,7 +2427,7 @@ describe('ConfigClient', () => {
   it('explains an authorization failure in terms the pipeline author can act on', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 403, text: async () => 'no' });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -2441,7 +2441,7 @@ describe('ConfigClient', () => {
   it('surfaces a transport failure as ConfigUnavailableError', async () => {
     const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -2543,7 +2543,7 @@ git commit -m "feat: read admin settings from extension data service"
 
 Ответ 200 без поля `value` — тоже ошибка, а не «ещё не настроено»: иначе испорченный документ выглядел бы для администратора как ненастроенный. Единственный путь, возвращающий `undefined`, — 404.
 
-`collectionUri` проверяется на непустоту и схему с указанием `System.CollectionUri`, иначе сообщение выглядело как сетевая проблема и не называло настоящую причину. Из всех сообщений вырезается userinfo: `https://user:s3cr3t@ado.corp/DC` иначе печатается в лог сборки целиком.
+`collectionUri` проверяется на непустоту и схему с указанием `System.CollectionUri`, иначе сообщение выглядело как сетевая проблема и не называло настоящую причину. Из всех сообщений вырезается userinfo: `https://user:s3cr3t@dev.example.com/DC` иначе печатается в лог сборки целиком.
 
 `documentId`, `publisher` и `extensionId` кодируются перед подстановкой в URL. `%24settings` при этом трогать нельзя — это уже закодированное имя коллекции `$settings`.
 
@@ -2884,7 +2884,7 @@ const report: NormalizedReport = {
   scanType: 'image',
   target: 'app:1.4.2',
   artifactName: 'app:1.4.2',
-  runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' },
+  runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' },
   findings: [
     {
       kind: 'vulnerability',
@@ -3074,9 +3074,9 @@ class FakeRunner implements ProcessRunner {
 }
 
 const runners: RunnerConfig[] = [
-  { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
+  { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
 ];
-const defaults: DefaultsConfig = { dbRepository: 'reg.corp/trivy-db:2' };
+const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
 const inputs: TaskInputs = { scanType: 'image', target: 'app:1.4.2' };
 
 let workspace: string;
@@ -4039,8 +4039,8 @@ describe('scan against a fake docker binary', () => {
   it('runs the runner image and turns its report into a gate result', async () => {
     const lines: string[] = [];
     const result = await runScan({
-      defaults: { dbRepository: 'reg.corp/trivy-db:2', failOn: 'HIGH' },
-      runners: [{ alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true }],
+      defaults: { dbRepository: 'registry.example.com/trivy-db:2', failOn: 'HIGH' },
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,
@@ -4061,8 +4061,8 @@ describe('scan against a fake docker binary', () => {
 
   it('passes the image and the mounts to docker exactly once', async () => {
     await runScan({
-      defaults: { dbRepository: 'reg.corp/trivy-db:2' },
-      runners: [{ alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true }],
+      defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,
@@ -4083,14 +4083,14 @@ describe('scan against a fake docker binary', () => {
       .map((line) => JSON.parse(line) as string[]);
 
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toContain('reg.corp/trivy:0.58.1');
+    expect(calls[1]).toContain('registry.example.com/trivy:0.58.1');
     expect(calls[1]).toContain(`${workspace}:/workspace`);
   });
 
   it('leaves no env file behind', async () => {
     await runScan({
-      defaults: { dbRepository: 'reg.corp/trivy-db:2' },
-      runners: [{ alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true }],
+      defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,

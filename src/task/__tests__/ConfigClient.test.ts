@@ -25,7 +25,7 @@ describe('ConfigClient', () => {
   it('requests the document from the extension data collection', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([{ alias: 'baseline' }]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection/',
+      collectionUri: 'https://dev.example.com/DefaultCollection/',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -36,7 +36,7 @@ describe('ConfigClient', () => {
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe(
-      'https://ado.corp/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1',
+      'https://dev.example.com/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1',
     );
     expect(init.headers.Authorization).toBe('Bearer tok');
   });
@@ -44,7 +44,7 @@ describe('ConfigClient', () => {
   it('sends basic auth when configured for a personal access token', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'pat', token: 'mypat' },
@@ -60,7 +60,7 @@ describe('ConfigClient', () => {
   it('returns the value field of the document', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([{ alias: 'baseline' }]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -77,7 +77,7 @@ describe('ConfigClient', () => {
     // rather than be reported to the administrator as "not configured".
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 404, text: async () => '' });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -94,7 +94,7 @@ describe('ConfigClient', () => {
     const html = '<!doctype html><html><body>Sign in with your corporate account to continue...</body></html>';
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => html });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -110,7 +110,7 @@ describe('ConfigClient', () => {
     const longBody = 'x'.repeat(500);
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => longBody });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -131,7 +131,7 @@ describe('ConfigClient', () => {
     const body = `${'x'.repeat(199)}\u{1F600}${'y'.repeat(300)}`;
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => body });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -147,7 +147,7 @@ describe('ConfigClient', () => {
     const malicious = 'oops\n##vso[task.complete result=Succeeded]\nmore binary';
     const fetchMock = jest.fn().mockResolvedValue({ ok: true, status: 200, text: async () => malicious });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -167,7 +167,7 @@ describe('ConfigClient', () => {
       .fn()
       .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ id: 'runners' }) });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -181,7 +181,7 @@ describe('ConfigClient', () => {
   it('explains an authorization failure in terms the pipeline author can act on', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 403, text: async () => 'no' });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -195,7 +195,7 @@ describe('ConfigClient', () => {
   it('surfaces a transport failure as ConfigUnavailableError', async () => {
     const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -211,7 +211,7 @@ describe('ConfigClient', () => {
   it('never puts the auth token in a transport-failure error message', async () => {
     const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'pat', token: 'super-secret-pat' },
@@ -224,7 +224,7 @@ describe('ConfigClient', () => {
   it('never puts the auth token in an HTTP-failure error message', async () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 403, text: async () => 'no' });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'super-secret-token' },
@@ -241,7 +241,7 @@ describe('ConfigClient', () => {
     // or query parameters into the request URL.
     const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -273,7 +273,7 @@ describe('ConfigClient', () => {
   it('rejects a collectionUri without an http/https scheme', async () => {
     const fetchMock = jest.fn();
     const client = new ConfigClient({
-      collectionUri: 'ado.corp/DefaultCollection',
+      collectionUri: 'dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -288,7 +288,7 @@ describe('ConfigClient', () => {
   it('encodes publisher and extensionId before interpolating them into the URL', async () => {
     const fetchMock = jest.fn().mockResolvedValue(okResponse([]));
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'ik software',
       extensionId: 'trivy/scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -306,7 +306,7 @@ describe('ConfigClient', () => {
   it('does not leak collectionUri userinfo into a transport-failure message, but still sends it to fetch', async () => {
     const fetchMock = jest.fn().mockRejectedValue(new Error('ECONNREFUSED'));
     const client = new ConfigClient({
-      collectionUri: 'https://user:s3cr3t@ado.corp/DC',
+      collectionUri: 'https://user:s3cr3t@dev.example.com/DC',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -317,16 +317,16 @@ describe('ConfigClient', () => {
 
     expect(error).toBeInstanceOf(ConfigUnavailableError);
     expect(error.message).not.toContain('s3cr3t');
-    expect(error.message).toContain('https://ado.corp/DC');
+    expect(error.message).toContain('https://dev.example.com/DC');
     // The request itself still needs the credentials to reach the server;
     // only messages surfaced to the reader are redacted.
     const [url] = fetchMock.mock.calls[0];
-    expect(url).toContain('user:s3cr3t@ado.corp');
+    expect(url).toContain('user:s3cr3t@dev.example.com');
   });
 
   it('does not leak userinfo into the invalid-collectionUri message either', async () => {
     const client = new ConfigClient({
-      collectionUri: 'ftp://user:s3cr3t@ado.corp/DC',
+      collectionUri: 'ftp://user:s3cr3t@dev.example.com/DC',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -344,7 +344,7 @@ describe('ConfigClient', () => {
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 404, text: async () => '' });
     const log = jest.fn();
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -358,7 +358,7 @@ describe('ConfigClient', () => {
     const [message] = log.mock.calls[0];
     expect(message).toContain('runners');
     expect(message).toContain(
-      'https://ado.corp/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner',
+      'https://dev.example.com/DefaultCollection/_apis/ExtensionManagement/InstalledExtensions/iksoftware/trivy-docker-scanner',
     );
   });
 
@@ -367,7 +367,7 @@ describe('ConfigClient', () => {
     // missing document (or have not been updated yet) must not crash.
     const fetchMock = jest.fn().mockResolvedValue({ ok: false, status: 404, text: async () => '' });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -384,7 +384,7 @@ describe('ConfigClient', () => {
       .fn()
       .mockResolvedValue({ ok: true, status: 200, text: async () => JSON.stringify({ id: 'runners', value: null }) });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },
@@ -399,7 +399,7 @@ describe('ConfigClient', () => {
       .fn()
       .mockResolvedValue({ ok: true, status: 200, text: () => Promise.reject(new Error('stream closed')) });
     const client = new ConfigClient({
-      collectionUri: 'https://ado.corp/DefaultCollection',
+      collectionUri: 'https://dev.example.com/DefaultCollection',
       publisher: 'iksoftware',
       extensionId: 'trivy-docker-scanner',
       auth: { mode: 'bearer', token: 'tok' },

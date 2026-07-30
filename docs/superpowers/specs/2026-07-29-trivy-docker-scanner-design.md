@@ -172,8 +172,8 @@ docker run --rm --name trivyscan-$(Build.BuildId)-<n>
 `docker login <host> --username <user> --password-stdin`, передавая пароль только через stdin
 (`RunOptions.stdin`), никогда через argv. `<host>` — это первый сегмент ссылки на образ до `/`,
 если он содержит точку или двоеточие (порт); иначе используется `docker.io` — то же правило,
-по которому docker сам разбирает ссылку на образ. Например, `reg.corp/trivy:0.58.1` →
-`reg.corp`, `reg.corp:5000/trivy:0.58.1` → `reg.corp:5000`, `nginx:1.25` → `docker.io`. Если
+по которому docker сам разбирает ссылку на образ. Например, `registry.example.com/trivy:0.58.1` →
+`registry.example.com`, `registry.example.com:5000/trivy:0.58.1` → `registry.example.com:5000`, `nginx:1.25` → `docker.io`. Если
 `docker login` завершается с ненулевым кодом, таск падает с сообщением, называющим registry и
 алиас раннера, и не пытается запустить сам скан — пул всё равно провалится с куда менее понятной
 ошибкой.

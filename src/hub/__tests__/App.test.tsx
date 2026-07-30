@@ -7,9 +7,9 @@ import { DefaultsConfig, RunnerConfig } from '../../shared/types';
 
 class FakeStore {
   runners: RunnerConfig[] = [
-    { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
+    { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
   ];
-  defaults: DefaultsConfig = { dbRepository: 'reg.corp/trivy-db:2' };
+  defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
   savedRunners: RunnerConfig[][] = [];
   failNextSave: Error | undefined;
 
@@ -53,7 +53,7 @@ describe('App', () => {
     await screen.findByText('baseline');
     await userEvent.click(screen.getByRole('button', { name: /add runner/i }));
     await userEvent.type(screen.getByLabelText(/alias/i), 'hardened');
-    await userEvent.type(screen.getByLabelText(/image/i), 'reg.corp/trivy-fips:0.58.1');
+    await userEvent.type(screen.getByLabelText(/image/i), 'registry.example.com/trivy-fips:0.58.1');
     await act(async () => {
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
     });
@@ -67,7 +67,7 @@ describe('App', () => {
     await screen.findByText('baseline');
     await userEvent.click(screen.getByRole('button', { name: /add runner/i }));
     await userEvent.type(screen.getByLabelText(/alias/i), 'hardened');
-    await userEvent.type(screen.getByLabelText(/image/i), 'reg.corp/trivy-fips:0.58.1');
+    await userEvent.type(screen.getByLabelText(/image/i), 'registry.example.com/trivy-fips:0.58.1');
     await userEvent.click(screen.getByLabelText(/default runner/i));
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/exactly one/i));
@@ -124,8 +124,8 @@ describe('App', () => {
   it('deletes one of several runners with no warning, since the remaining catalog is still valid', async () => {
     const store = new FakeStore();
     store.runners = [
-      { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
-      { alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: true },
+      { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+      { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: true },
     ];
     render(<App store={store} />);
     await screen.findByText('legacy');

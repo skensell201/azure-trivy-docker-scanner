@@ -3,7 +3,7 @@ import { DefaultsConfig, RunnerConfig } from '../../shared/types';
 
 const runner = (over: Partial<RunnerConfig> = {}): RunnerConfig => ({
   alias: 'baseline',
-  image: 'reg.corp/trivy:0.58.1',
+  image: 'registry.example.com/trivy:0.58.1',
   isDefault: true,
   enabled: true,
   ...over,
@@ -106,7 +106,7 @@ describe('SettingsStore', () => {
 
   it('saves defaults under their own document id and etag', async () => {
     const manager = new FakeManager();
-    const defaults: DefaultsConfig = { dbRepository: 'reg.corp/trivy-db:2' };
+    const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
     const store = new SettingsStore(manager);
     await store.saveDefaults(defaults);
     expect(manager.setCalls[0]).toMatchObject({ id: 'defaults', value: defaults, __etag: -1 });

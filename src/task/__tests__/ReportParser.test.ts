@@ -5,7 +5,7 @@ import { parseTrivyReport, parseVersion, TrivyReportParseError } from '../Report
 const fixture = (name: string): string =>
   fs.readFileSync(path.join(__dirname, '../../../test/fixtures/trivy', name), 'utf8');
 
-const meta = { scanType: 'image' as const, target: 'app:1.4.2', runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' } };
+const meta = { scanType: 'image' as const, target: 'app:1.4.2', runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' } };
 
 describe('parseTrivyReport', () => {
   it('flattens vulnerabilities from every result into findings', () => {
@@ -97,7 +97,7 @@ describe('parseTrivyReport', () => {
 
   it('rejects malformed json with the runner and target in the message', () => {
     expect(() => parseTrivyReport('{not json', meta)).toThrow(TrivyReportParseError);
-    expect(() => parseTrivyReport('{not json', meta)).toThrow(/reg.corp\/trivy:0.58.1/);
+    expect(() => parseTrivyReport('{not json', meta)).toThrow(/registry.example.com\/trivy:0.58.1/);
   });
 
   it('rejects a json document that is not a trivy report', () => {
@@ -168,7 +168,7 @@ describe('malformed and hostile trivy output', () => {
   // property access (`document.Results`) throws a raw, unactionable TypeError instead.
   it('rejects a bare JSON null document with an actionable error instead of a raw TypeError', () => {
     expect(() => parseTrivyReport('null', meta)).toThrow(TrivyReportParseError);
-    expect(() => parseTrivyReport('null', meta)).toThrow(/reg.corp\/trivy:0.58.1/);
+    expect(() => parseTrivyReport('null', meta)).toThrow(/registry.example.com\/trivy:0.58.1/);
     expect(() => parseTrivyReport('null', meta)).toThrow(/app:1.4.2/);
   });
 

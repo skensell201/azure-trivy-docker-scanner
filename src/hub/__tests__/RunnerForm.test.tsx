@@ -6,7 +6,7 @@ import { RunnerConfig } from '../../shared/types';
 
 const existing: RunnerConfig = {
   alias: 'baseline',
-  image: 'reg.corp/trivy:0.58.1',
+  image: 'registry.example.com/trivy:0.58.1',
   isDefault: true,
   enabled: true,
   registryUsername: 'svc',
@@ -22,7 +22,7 @@ describe('RunnerForm', () => {
   it('prefills the fields when editing', () => {
     render(<RunnerForm runner={existing} onSave={jest.fn()} onCancel={jest.fn()} />);
     expect((screen.getByLabelText('Alias') as HTMLInputElement).value).toBe('baseline');
-    expect((screen.getByLabelText('Image') as HTMLInputElement).value).toBe('reg.corp/trivy:0.58.1');
+    expect((screen.getByLabelText('Image') as HTMLInputElement).value).toBe('registry.example.com/trivy:0.58.1');
   });
 
   it('never renders the stored password', () => {
@@ -71,7 +71,7 @@ describe('RunnerForm', () => {
     const onSave = jest.fn();
     render(<RunnerForm runner={undefined} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), 'Bad Alias');
-    await userEvent.type(screen.getByLabelText('Image'), 'reg.corp/trivy:latest');
+    await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy:latest');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSave).not.toHaveBeenCalled();
     expect(screen.getByRole('alert').textContent).toMatch(/lowercase/);
@@ -82,10 +82,10 @@ describe('RunnerForm', () => {
     const onSave = jest.fn();
     render(<RunnerForm runner={undefined} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), 'hardened');
-    await userEvent.type(screen.getByLabelText('Image'), 'reg.corp/trivy-fips:0.58.1');
+    await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy-fips:0.58.1');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ alias: 'hardened', image: 'reg.corp/trivy-fips:0.58.1' }),
+      expect.objectContaining({ alias: 'hardened', image: 'registry.example.com/trivy-fips:0.58.1' }),
     );
   });
 
@@ -93,7 +93,7 @@ describe('RunnerForm', () => {
     const onSave = jest.fn();
     render(<RunnerForm runner={undefined} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), 'hardened');
-    await userEvent.type(screen.getByLabelText('Image'), 'reg.corp/trivy:0.58.1');
+    await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy:0.58.1');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     const saved = onSave.mock.calls[0][0] as RunnerConfig;
     expect('registryUsername' in saved).toBe(false);
@@ -104,7 +104,7 @@ describe('RunnerForm', () => {
     const onSave = jest.fn();
     render(<RunnerForm runner={undefined} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), 'hardened');
-    await userEvent.type(screen.getByLabelText('Image'), 'reg.corp/trivy:0.58.1');
+    await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy:0.58.1');
     await userEvent.type(screen.getByLabelText(/registry username/i), 'svc');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSave).not.toHaveBeenCalled();
@@ -115,17 +115,17 @@ describe('RunnerForm', () => {
     const onSave = jest.fn();
     render(<RunnerForm runner={undefined} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), '  hardened  ');
-    await userEvent.type(screen.getByLabelText('Image'), '  reg.corp/trivy:0.58.1  ');
+    await userEvent.type(screen.getByLabelText('Image'), '  registry.example.com/trivy:0.58.1  ');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSave).toHaveBeenCalledWith(
-      expect.objectContaining({ alias: 'hardened', image: 'reg.corp/trivy:0.58.1' }),
+      expect.objectContaining({ alias: 'hardened', image: 'registry.example.com/trivy:0.58.1' }),
     );
   });
 
   it('treats an omitted enabled flag as enabled when editing', () => {
     render(
       <RunnerForm
-        runner={{ alias: 'plain', image: 'reg.corp/trivy:0.58.1' }}
+        runner={{ alias: 'plain', image: 'registry.example.com/trivy:0.58.1' }}
         onSave={jest.fn()}
         onCancel={jest.fn()}
       />,

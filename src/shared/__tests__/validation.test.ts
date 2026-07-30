@@ -3,14 +3,14 @@ import { DefaultsConfig, RunnerConfig, Scanner, Severity } from '../types';
 
 const runner = (over: Partial<RunnerConfig> = {}): RunnerConfig => ({
   alias: 'baseline',
-  image: 'reg.corp/trivy:0.58.1',
+  image: 'registry.example.com/trivy:0.58.1',
   isDefault: true,
   enabled: true,
   ...over,
 });
 
 const defaults = (over: Partial<DefaultsConfig> = {}): DefaultsConfig => ({
-  dbRepository: 'reg.corp/trivy-db:2',
+  dbRepository: 'registry.example.com/trivy-db:2',
   ...over,
 });
 
@@ -30,12 +30,12 @@ describe('validateRunner', () => {
   });
 
   it('requires an explicit tag on the image', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp/trivy' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com/trivy' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('tag') }]);
   });
 
   it('rejects the latest tag because it is not reproducible', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp/trivy:latest' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com/trivy:latest' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('latest') }]);
   });
 
@@ -62,12 +62,12 @@ describe('validateRunner', () => {
   });
 
   it('rejects a missing tag on a registry with an explicit port, without confusing the port for a tag', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp:5000/trivy' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com:5000/trivy' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('tag') }]);
   });
 
   it('accepts an explicit tag on a registry with an explicit port', () => {
-    expect(validateRunner(runner({ image: 'reg.corp:5000/trivy:0.58.1' }))).toEqual([]);
+    expect(validateRunner(runner({ image: 'registry.example.com:5000/trivy:0.58.1' }))).toEqual([]);
   });
 
   // --- Fix 1: shape guards, so a hand-edited document reports an issue instead of throwing ---
@@ -101,34 +101,34 @@ describe('validateRunner', () => {
   });
 
   it('accepts a repository name containing "latest" as a substring, only rejecting the tag itself', () => {
-    expect(validateRunner(runner({ image: 'reg.corp/latest-trivy:0.58.1' }))).toEqual([]);
+    expect(validateRunner(runner({ image: 'registry.example.com/latest-trivy:0.58.1' }))).toEqual([]);
   });
 
   // --- Fix 4: the tag rule must reject nonsense but keep accepting digests ---
 
   it('rejects an empty tag', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp/trivy:' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com/trivy:' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('tag') }]);
   });
 
   it('rejects trailing text read as part of the tag', () => {
-    const issues = validateRunner(runner({ image: 'reg.corp/trivy:0.58.1 --privileged' }));
+    const issues = validateRunner(runner({ image: 'registry.example.com/trivy:0.58.1 --privileged' }));
     expect(issues).toEqual([{ field: 'image', message: expect.stringContaining('tag') }]);
   });
 
   it('accepts a digest reference', () => {
-    expect(validateRunner(runner({ image: `reg.corp/trivy@sha256:${'a'.repeat(64)}` }))).toEqual([]);
+    expect(validateRunner(runner({ image: `registry.example.com/trivy@sha256:${'a'.repeat(64)}` }))).toEqual([]);
   });
 
   it('accepts a digest reference on a registry with an explicit port', () => {
     expect(
-      validateRunner(runner({ image: `reg.corp:5000/trivy@sha256:${'a'.repeat(64)}` })),
+      validateRunner(runner({ image: `registry.example.com:5000/trivy@sha256:${'a'.repeat(64)}` })),
     ).toEqual([]);
   });
 
   it('accepts a digest reference alongside an explicit tag', () => {
     expect(
-      validateRunner(runner({ image: `reg.corp/trivy:0.58.1@sha256:${'a'.repeat(64)}` })),
+      validateRunner(runner({ image: `registry.example.com/trivy:0.58.1@sha256:${'a'.repeat(64)}` })),
     ).toEqual([]);
   });
 
@@ -209,7 +209,7 @@ describe('validateCatalog', () => {
   it('accepts a default runner with enabled omitted, since omitted means enabled', () => {
     const catalogRunner: RunnerConfig = {
       alias: 'baseline',
-      image: 'reg.corp/trivy:0.58.1',
+      image: 'registry.example.com/trivy:0.58.1',
       isDefault: true,
     };
     expect(validateCatalog([catalogRunner])).toEqual([]);

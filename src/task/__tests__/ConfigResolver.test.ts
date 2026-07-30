@@ -2,12 +2,12 @@ import { resolveConfig, PolicyViolationError, RunnerNotFoundError } from '../Con
 import { AgentContext, DefaultsConfig, RunnerConfig, TaskInputs } from '../../shared/types';
 
 const runners: RunnerConfig[] = [
-  { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
-  { alias: 'hardened', image: 'reg.corp/trivy-fips:0.58.1', enabled: true },
-  { alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: false },
+  { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+  { alias: 'hardened', image: 'registry.example.com/trivy-fips:0.58.1', enabled: true },
+  { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false },
 ];
 
-const defaults: DefaultsConfig = { dbRepository: 'reg.corp/trivy-db:2' };
+const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
 
 const agent: AgentContext = {
   sourcesDir: '/agent/_work/1/s',
@@ -149,7 +149,7 @@ describe('resolveConfig', () => {
     expect(() =>
       resolveConfig({
         defaults,
-        runners: [{ alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: false }],
+        runners: [{ alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false }],
         inputs: inputs({ runner: 'legacy' }),
         agent,
         scanIndex: 0,
@@ -233,7 +233,7 @@ describe('Fix 4: whole-object contract', () => {
   it('pins every built-in default in one assertion when nothing else is set', () => {
     const config = resolveConfig({ defaults, runners, inputs: inputs(), agent, scanIndex: 0 });
     expect(config).toEqual({
-      runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
+      runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
       scanType: 'image',
       target: 'app:1.4.2',
       severities: ['CRITICAL', 'HIGH'],
@@ -242,7 +242,7 @@ describe('Fix 4: whole-object contract', () => {
       ignoreUnfixed: false,
       skipDbUpdate: false,
       timeoutMinutes: 10,
-      dbRepository: 'reg.corp/trivy-db:2',
+      dbRepository: 'registry.example.com/trivy-db:2',
       javaDbRepository: undefined,
       cacheDir: '/agent/_trivy-cache',
       sourcesDir: '/agent/_work/1/s',
@@ -260,8 +260,8 @@ describe('Fix 4: whole-object contract', () => {
 
   it('pins every precedence and pass-through rule when both admin and pipeline set every field', () => {
     const fullDefaults: DefaultsConfig = {
-      dbRepository: 'reg.corp/trivy-db:2',
-      javaDbRepository: 'reg.corp/trivy-java-db:1',
+      dbRepository: 'registry.example.com/trivy-db:2',
+      javaDbRepository: 'registry.example.com/trivy-java-db:1',
       dbRegistryUsername: 'admin-user',
       dbRegistryPassword: 'admin-pass',
       cacheDir: '/admin/cache',
@@ -302,7 +302,7 @@ describe('Fix 4: whole-object contract', () => {
     });
 
     expect(config).toEqual({
-      runner: { alias: 'hardened', image: 'reg.corp/trivy-fips:0.58.1', enabled: true },
+      runner: { alias: 'hardened', image: 'registry.example.com/trivy-fips:0.58.1', enabled: true },
       scanType: 'filesystem',
       target: '.',
       severities: ['LOW', 'MEDIUM'],
@@ -311,8 +311,8 @@ describe('Fix 4: whole-object contract', () => {
       ignoreUnfixed: false,
       skipDbUpdate: false,
       timeoutMinutes: 5,
-      dbRepository: 'reg.corp/trivy-db:2',
-      javaDbRepository: 'reg.corp/trivy-java-db:1',
+      dbRepository: 'registry.example.com/trivy-db:2',
+      javaDbRepository: 'registry.example.com/trivy-java-db:1',
       cacheDir: '/admin/cache',
       sourcesDir: '/agent/_work/1/s',
       workingDirectory: 'subdir',
@@ -333,7 +333,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     expect(() =>
       resolveConfig({
         defaults,
-        runners: [{ alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: false }],
+        runners: [{ alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false }],
         inputs: inputs({ runner: 'nope' }),
         agent,
         scanIndex: 0,
@@ -363,7 +363,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     expect(() =>
       resolveConfig({
         defaults,
-        runners: [{ alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: false }],
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: false }],
         inputs: inputs(),
         agent,
         scanIndex: 0,

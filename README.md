@@ -85,7 +85,7 @@ Both documents live in the extension's `%24settings` collection (`%24` is the UR
 that the Extension Data Service requires in the collection name). Set these once:
 
 ```bash
-export ADO="https://ado.corp/DefaultCollection"
+export ADO="https://dev.example.com/DefaultCollection"
 export PAT="<pat-with-extension-data-scope>"
 export PUB="iksoftware"; export EXT="trivy-docker-scanner"
 ```
@@ -96,7 +96,7 @@ export PUB="iksoftware"; export EXT="trivy-docker-scanner"
 curl -sS -u ":$PAT" -X PUT \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents?api-version=3.2-preview.1" \
   -H 'Content-Type: application/json' \
-  -d '{"id":"runners","__etag":-1,"value":[{"alias":"baseline","image":"reg.corp/trivy:0.58.1","isDefault":true,"enabled":true,"registryUsername":"svc-trivy","registryPassword":"<password>"}]}'
+  -d '{"id":"runners","__etag":-1,"value":[{"alias":"baseline","image":"registry.example.com/trivy:0.58.1","isDefault":true,"enabled":true,"registryUsername":"svc-trivy","registryPassword":"<password>"}]}'
 ```
 
 Validation rules (`src/shared/validation.ts`): `alias` must be lowercase letters, digits and
@@ -120,7 +120,7 @@ service/robot account over a personal one for `registryUsername`.
 curl -sS -u ":$PAT" -X PUT \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents?api-version=3.2-preview.1" \
   -H 'Content-Type: application/json' \
-  -d '{"id":"defaults","__etag":-1,"value":{"dbRepository":"reg.corp/trivy-db:2","dbRegistryUsername":"svc-trivy-db","dbRegistryPassword":"<password>"}}'
+  -d '{"id":"defaults","__etag":-1,"value":{"dbRepository":"registry.example.com/trivy-db:2","dbRegistryUsername":"svc-trivy-db","dbRegistryPassword":"<password>"}}'
 ```
 
 `dbRepository` (the OCI reference of the internal vulnerability-database mirror) is the only

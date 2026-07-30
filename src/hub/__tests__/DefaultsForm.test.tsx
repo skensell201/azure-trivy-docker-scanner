@@ -5,7 +5,7 @@ import { DefaultsForm } from '../components/DefaultsForm';
 import { DefaultsConfig } from '../../shared/types';
 
 const stored: DefaultsConfig = {
-  dbRepository: 'reg.corp/trivy-db:2',
+  dbRepository: 'registry.example.com/trivy-db:2',
   severities: ['CRITICAL', 'HIGH'],
   failOn: 'CRITICAL',
   timeoutMinutes: 10,
@@ -17,7 +17,7 @@ describe('DefaultsForm', () => {
   it('prefills from the stored document', () => {
     render(<DefaultsForm defaults={stored} onSave={jest.fn()} />);
     expect((screen.getByLabelText(/database repository/i) as HTMLInputElement).value).toBe(
-      'reg.corp/trivy-db:2',
+      'registry.example.com/trivy-db:2',
     );
   });
 
@@ -67,7 +67,7 @@ describe('DefaultsForm', () => {
 
   it('omits an empty optional field instead of storing an empty string', async () => {
     const onSave = jest.fn();
-    render(<DefaultsForm defaults={{ dbRepository: 'reg.corp/trivy-db:2' }} onSave={onSave} />);
+    render(<DefaultsForm defaults={{ dbRepository: 'registry.example.com/trivy-db:2' }} onSave={onSave} />);
     await userEvent.click(screen.getByRole('button', { name: /save/i }));
     const saved = onSave.mock.calls[0][0] as DefaultsConfig;
     expect('javaDbRepository' in saved).toBe(false);

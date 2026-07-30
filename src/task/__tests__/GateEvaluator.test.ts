@@ -25,7 +25,7 @@ const report = (findings: Finding[]): NormalizedReport => {
     scanType: 'image',
     target: 'app:1.4.2',
     artifactName: 'app:1.4.2',
-    runner: { alias: 'baseline', image: 'reg.corp/trivy:0.58.1' },
+    runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' },
     findings,
     counts,
     kindCounts: { vulnerability: findings.length, secret: 0, misconfiguration: 0, license: 0 },

@@ -5,8 +5,8 @@ import { RunnerTable } from '../components/RunnerTable';
 import { RunnerConfig } from '../../shared/types';
 
 const runners: RunnerConfig[] = [
-  { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
-  { alias: 'legacy', image: 'reg.corp/trivy:0.44.0', enabled: false },
+  { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+  { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false },
 ];
 
 describe('RunnerTable', () => {
@@ -18,7 +18,7 @@ describe('RunnerTable', () => {
   it('lists every runner with its alias and image', () => {
     render(<RunnerTable runners={runners} onEdit={jest.fn()} onDelete={jest.fn()} />);
     expect(screen.getByText('baseline')).toBeTruthy();
-    expect(screen.getByText('reg.corp/trivy:0.58.1')).toBeTruthy();
+    expect(screen.getByText('registry.example.com/trivy:0.58.1')).toBeTruthy();
     expect(screen.getByText('legacy')).toBeTruthy();
   });
 
@@ -37,7 +37,7 @@ describe('RunnerTable', () => {
   it('does not label an ordinary runner as default or disabled', () => {
     render(
       <RunnerTable
-        runners={[{ alias: 'plain', image: 'reg.corp/trivy:0.58.1' }]}
+        runners={[{ alias: 'plain', image: 'registry.example.com/trivy:0.58.1' }]}
         onEdit={jest.fn()}
         onDelete={jest.fn()}
       />,

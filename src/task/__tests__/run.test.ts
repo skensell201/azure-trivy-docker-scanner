@@ -37,9 +37,9 @@ class FakeRunner implements ProcessRunner {
 }
 
 const runners: RunnerConfig[] = [
-  { alias: 'baseline', image: 'reg.corp/trivy:0.58.1', isDefault: true, enabled: true },
+  { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
 ];
-const defaults: DefaultsConfig = { dbRepository: 'reg.corp/trivy-db:2' };
+const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
 const inputs: TaskInputs = { scanType: 'image', target: 'app:1.4.2' };
 
 let workspace: string;
@@ -392,7 +392,7 @@ describe('runScan', () => {
     } catch (e) {
       error = e as Error;
     }
-    expect(error?.message).toMatch(/reg\.corp\/trivy-db:2/);
+    expect(error?.message).toMatch(/registry\.example\.com\/trivy-db:2/);
     expect(error?.message).toMatch(/credentials were supplied/i);
   });
 
@@ -407,7 +407,7 @@ describe('runScan', () => {
     } catch (e) {
       error = e as Error;
     }
-    expect(error?.message).toMatch(/reg\.corp\/trivy-db:2/);
+    expect(error?.message).toMatch(/registry\.example\.com\/trivy-db:2/);
     expect(error?.message).toMatch(/no credentials were supplied/i);
   });
 
@@ -469,7 +469,7 @@ describe('runScan', () => {
     }
 
     const result = await invoke(new JunkVersionRunner());
-    expect(result.report.runner).toEqual({ alias: 'baseline', image: 'reg.corp/trivy:0.58.1' });
+    expect(result.report.runner).toEqual({ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' });
     expect(result.report.findings).toHaveLength(1);
   });
 
@@ -490,7 +490,7 @@ describe('runScan', () => {
 
     const result = await invoke(new RejectingVersionRunner());
 
-    expect(result.report.runner).toEqual({ alias: 'baseline', image: 'reg.corp/trivy:0.58.1' });
+    expect(result.report.runner).toEqual({ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1' });
     expect(result.gate.outcome).toBe('failed');
     expect(
       lines.some(
@@ -784,7 +784,7 @@ describe('runScan', () => {
     const runnersWithCreds: RunnerConfig[] = [
       {
         alias: 'baseline',
-        image: 'reg.corp/trivy:0.58.1',
+        image: 'registry.example.com/trivy:0.58.1',
         isDefault: true,
         enabled: true,
         registryUsername: 'svc-runner',
@@ -813,7 +813,7 @@ describe('runScan', () => {
 
       expect(runner.calls[0].args).toEqual([
         'login',
-        'reg.corp',
+        'registry.example.com',
         '--username',
         'svc-runner',
         '--password-stdin',
@@ -836,7 +836,7 @@ describe('runScan', () => {
         publisher: new Publisher((line) => lines.push(line)),
         credentials: {},
       });
-      expect(runner.calls[0].args[1]).toBe('reg.corp');
+      expect(runner.calls[0].args[1]).toBe('registry.example.com');
     });
 
     it('derives the login host from a registry with an explicit port', async () => {
@@ -844,7 +844,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners: [
-          { ...runnersWithCreds[0], image: 'reg.corp:5000/trivy:0.58.1' },
+          { ...runnersWithCreds[0], image: 'registry.example.com:5000/trivy:0.58.1' },
         ],
         inputs,
         agent,
@@ -853,7 +853,7 @@ describe('runScan', () => {
         publisher: new Publisher((line) => lines.push(line)),
         credentials: {},
       });
-      expect(runner.calls[0].args[1]).toBe('reg.corp:5000');
+      expect(runner.calls[0].args[1]).toBe('registry.example.com:5000');
     });
 
     it('derives the Docker Hub host for a bare image name', async () => {
@@ -893,7 +893,7 @@ describe('runScan', () => {
         error = e as Error;
       }
 
-      expect(error?.message).toMatch(/reg\.corp/);
+      expect(error?.message).toMatch(/registry\.example\.com/);
       expect(error?.message).toMatch(/baseline/);
       expect(runner.calls).toHaveLength(1);
       expect(runner.calls.some((call) => call.args.includes('version'))).toBe(false);
