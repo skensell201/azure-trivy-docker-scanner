@@ -8,12 +8,15 @@ export interface DefaultsFormProps {
   onSave: (defaults: DefaultsConfig) => void;
 }
 
-/** Splits a comma-separated field into trimmed, non-empty entries. An empty string means "not set". */
+/**
+ * Splits a non-empty comma-separated field into trimmed entries. Deliberately does not drop
+ * blank entries produced by a stray comma (e.g. "CRITICAL, ,HIGH"): silently discarding them
+ * would hide a typo from the administrator. Leaving the empty string in place lets
+ * `validateDefaults` reject it as "not a valid severity/scanner", which is its job, not this
+ * form's.
+ */
 function splitList(raw: string): string[] {
-  return raw
-    .split(',')
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+  return raw.split(',').map((entry) => entry.trim());
 }
 
 export function DefaultsForm({ defaults, onSave }: DefaultsFormProps): JSX.Element {
