@@ -1,11 +1,19 @@
-import { resolveConfig, PolicyViolationError, RunnerNotFoundError } from '../ConfigResolver';
-import { AgentContext, DefaultsConfig, RunnerConfig, TaskInputs } from '../../shared/types';
+import { resolveConfig, DatabaseNotFoundError, PolicyViolationError, RunnerNotFoundError } from '../ConfigResolver';
+import { AgentContext, DatabaseConfig, DefaultsConfig, RunnerConfig, TaskInputs } from '../../shared/types';
 
 const runners: RunnerConfig[] = [
   { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
   { alias: 'hardened', image: 'registry.example.com/trivy-fips:0.58.1', enabled: true },
   { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false },
 ];
+
+// Every resolveConfig call in this file that does not care about database resolution goes
+// through the deprecated dbRepository fallback (the `runners` fixture above names no
+// `database`, and `databases` below is empty) -- deliberately, so tests written before the
+// catalogue existed keep exercising the same fallback path rather than needing a catalogue
+// entry wired in just to compile. `usedDeprecatedDatabaseFallback` is asserted directly by
+// the "database catalogue" describe block instead of here.
+const databases: DatabaseConfig[] = [];
 
 const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
 
@@ -24,12 +32,12 @@ const inputs = (over: Partial<TaskInputs> = {}): TaskInputs => ({
 
 describe('resolveConfig', () => {
   it('falls back to the default runner when the pipeline names none', () => {
-    const config = resolveConfig({ defaults, runners, inputs: inputs(), agent, scanIndex: 0 });
+    const config = resolveConfig({ defaults, runners, databases, inputs: inputs(), agent, scanIndex: 0 });
     expect(config.runner.alias).toBe('baseline');
   });
 
   it('applies built-in defaults when neither admin nor pipeline set a value', () => {
-    const config = resolveConfig({ defaults, runners, inputs: inputs(), agent, scanIndex: 0 });
+    const config = resolveConfig({ defaults, runners, databases, inputs: inputs(), agent, scanIndex: 0 });
     expect(config.severities).toEqual(['CRITICAL', 'HIGH']);
     expect(config.scanners).toEqual(['vuln', 'secret']);
     expect(config.failOn).toBe('CRITICAL');
@@ -42,6 +50,7 @@ describe('resolveConfig', () => {
     const config = resolveConfig({
       defaults: { ...defaults, failOn: 'HIGH', timeoutMinutes: 25 },
       runners,
+      databases,
       inputs: inputs(),
       agent,
       scanIndex: 0,
@@ -54,6 +63,7 @@ describe('resolveConfig', () => {
     const config = resolveConfig({
       defaults: { ...defaults, failOn: 'CRITICAL' },
       runners,
+      databases,
       inputs: inputs({ failOn: 'LOW' }),
       agent,
       scanIndex: 0,
@@ -66,6 +76,7 @@ describe('resolveConfig', () => {
       resolveConfig({
         defaults: { ...defaults, allowOverrides: ['severities'] },
         runners,
+        databases,
         inputs: inputs({ failOn: 'LOW' }),
         agent,
         scanIndex: 0,
@@ -78,6 +89,7 @@ describe('resolveConfig', () => {
       resolveConfig({
         defaults: { ...defaults, allowOverrides: ['severities'] },
         runners,
+        databases,
         inputs: inputs({ failOn: 'LOW' }),
         agent,
         scanIndex: 0,
@@ -87,24 +99,24 @@ describe('resolveConfig', () => {
 
   it('lists the available aliases when the requested runner does not exist', () => {
     expect(() =>
-      resolveConfig({ defaults, runners, inputs: inputs({ runner: 'nope' }), agent, scanIndex: 0 }),
+      resolveConfig({ defaults, runners, databases, inputs: inputs({ runner: 'nope' }), agent, scanIndex: 0 }),
     ).toThrow(/baseline, hardened/);
   });
 
   it('refuses a disabled runner', () => {
     expect(() =>
-      resolveConfig({ defaults, runners, inputs: inputs({ runner: 'legacy' }), agent, scanIndex: 0 }),
+      resolveConfig({ defaults, runners, databases, inputs: inputs({ runner: 'legacy' }), agent, scanIndex: 0 }),
     ).toThrow(RunnerNotFoundError);
   });
 
   it('fails when the catalog is empty', () => {
     expect(() =>
-      resolveConfig({ defaults, runners: [], inputs: inputs(), agent, scanIndex: 0 }),
+      resolveConfig({ defaults, runners: [], databases, inputs: inputs(), agent, scanIndex: 0 }),
     ).toThrow(/no runners/i);
   });
 
   it('carries agent context into the resolved config', () => {
-    const config = resolveConfig({ defaults, runners, inputs: inputs(), agent, scanIndex: 2 });
+    const config = resolveConfig({ defaults, runners, databases, inputs: inputs(), agent, scanIndex: 2 });
     expect(config.sourcesDir).toBe('/agent/_work/1/s');
     expect(config.buildId).toBe('1042');
     expect(config.scanIndex).toBe(2);
@@ -115,6 +127,7 @@ describe('resolveConfig', () => {
       resolveConfig({
         defaults: { ...defaults, allowOverrides: [] },
         runners,
+        databases,
         inputs: inputs({ failOn: 'LOW' }),
         agent,
         scanIndex: 0,
@@ -126,6 +139,7 @@ describe('resolveConfig', () => {
     const config = resolveConfig({
       defaults: { ...defaults, ignoreUnfixed: true },
       runners,
+      databases,
       inputs: inputs({ ignoreUnfixed: false }),
       agent,
       scanIndex: 0,
@@ -138,6 +152,7 @@ describe('resolveConfig', () => {
       resolveConfig({
         defaults: { ...defaults, allowOverrides: ['severities'] },
         runners,
+        databases,
         inputs: inputs({ runner: 'hardened' }),
         agent,
         scanIndex: 0,
@@ -149,7 +164,7 @@ describe('resolveConfig', () => {
     expect(() =>
       resolveConfig({
         defaults,
-        runners: [{ alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false }],
+        runners: [{ alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false }], databases,
         inputs: inputs({ runner: 'legacy' }),
         agent,
         scanIndex: 0,
@@ -164,6 +179,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
       resolveConfig({
         defaults: { ...defaults, allowOverrides: [] },
         runners,
+        databases,
         inputs: inputs({ useDockerSocket: true }),
         agent,
         scanIndex: 0,
@@ -175,6 +191,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
     const config = resolveConfig({
       defaults,
       runners,
+      databases,
       inputs: inputs({ useDockerSocket: true }),
       agent,
       scanIndex: 0,
@@ -187,6 +204,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
       resolveConfig({
         defaults: { ...defaults, allowOverrides: [] },
         runners,
+        databases,
         inputs: inputs({ extraTrivyArgs: '--severity LOW' }),
         agent,
         scanIndex: 0,
@@ -198,6 +216,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
     const config = resolveConfig({
       defaults,
       runners,
+      databases,
       inputs: inputs({ extraTrivyArgs: '--offline-scan' }),
       agent,
       scanIndex: 0,
@@ -210,6 +229,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
       resolveConfig({
         defaults: { ...defaults, allowOverrides: [] },
         runners,
+        databases,
         inputs: inputs({ ignoreFile: '.trivyignore' }),
         agent,
         scanIndex: 0,
@@ -221,6 +241,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
     const config = resolveConfig({
       defaults,
       runners,
+      databases,
       inputs: inputs({ ignoreFile: '.trivyignore' }),
       agent,
       scanIndex: 0,
@@ -231,7 +252,7 @@ describe('Fix 1: policy gates useDockerSocket, extraTrivyArgs and ignoreFile', (
 
 describe('Fix 4: whole-object contract', () => {
   it('pins every built-in default in one assertion when nothing else is set', () => {
-    const config = resolveConfig({ defaults, runners, inputs: inputs(), agent, scanIndex: 0 });
+    const config = resolveConfig({ defaults, runners, databases, inputs: inputs(), agent, scanIndex: 0 });
     expect(config).toEqual({
       runner: { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
       scanType: 'image',
@@ -257,6 +278,10 @@ describe('Fix 4: whole-object contract', () => {
       buildId: '1042',
       scanIndex: 0,
       sourceTransfer: 'mount',
+      // The `runners`/`databases` fixtures at the top of this file deliberately exercise the
+      // deprecated-fallback path (see the comment on `databases` above), so this whole-object
+      // pin must expect it too.
+      usedDeprecatedDatabaseFallback: true,
     });
   });
 
@@ -300,6 +325,7 @@ describe('Fix 4: whole-object contract', () => {
     const config = resolveConfig({
       defaults: fullDefaults,
       runners,
+      databases,
       inputs: fullInputs,
       agent,
       scanIndex: 3,
@@ -330,6 +356,9 @@ describe('Fix 4: whole-object contract', () => {
       buildId: '1042',
       scanIndex: 3,
       sourceTransfer: 'copy',
+      dbRegistryUsername: 'admin-user',
+      dbRegistryPassword: 'admin-pass',
+      usedDeprecatedDatabaseFallback: true,
     });
   });
 
@@ -337,6 +366,7 @@ describe('Fix 4: whole-object contract', () => {
     const config = resolveConfig({
       defaults: { ...defaults, allowOverrides: [] },
       runners,
+      databases,
       inputs: inputs({ sourceTransfer: 'copy' }),
       agent,
       scanIndex: 0,
@@ -351,6 +381,7 @@ describe('Fix 4: whole-object contract', () => {
     const config = resolveConfig({
       defaults: { ...defaults, allowOverrides: [] },
       runners,
+      databases,
       inputs: inputs({ publishTestResults: true }),
       agent,
       scanIndex: 0,
@@ -364,7 +395,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     expect(() =>
       resolveConfig({
         defaults,
-        runners: [{ alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false }],
+        runners: [{ alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: false }], databases,
         inputs: inputs({ runner: 'nope' }),
         agent,
         scanIndex: 0,
@@ -376,12 +407,12 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     let unknownMessage = '';
     let disabledMessage = '';
     try {
-      resolveConfig({ defaults, runners, inputs: inputs({ runner: 'nope' }), agent, scanIndex: 0 });
+      resolveConfig({ defaults, runners, databases, inputs: inputs({ runner: 'nope' }), agent, scanIndex: 0 });
     } catch (e) {
       unknownMessage = (e as Error).message;
     }
     try {
-      resolveConfig({ defaults, runners, inputs: inputs({ runner: 'legacy' }), agent, scanIndex: 0 });
+      resolveConfig({ defaults, runners, databases, inputs: inputs({ runner: 'legacy' }), agent, scanIndex: 0 });
     } catch (e) {
       disabledMessage = (e as Error).message;
     }
@@ -394,7 +425,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     expect(() =>
       resolveConfig({
         defaults,
-        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: false }],
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: false }], databases,
         inputs: inputs(),
         agent,
         scanIndex: 0,
@@ -406,6 +437,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
     const config = resolveConfig({
       defaults: { ...defaults, allowOverrides: ['severities'] },
       runners,
+      databases,
       inputs: inputs({ runner: '' }),
       agent,
       scanIndex: 0,
@@ -418,6 +450,7 @@ describe('Fix 5: actionable runner and policy error messages', () => {
       resolveConfig({
         defaults: { ...defaults, allowOverrides: ['severities'], failOn: 'CRITICAL' },
         runners,
+        databases,
         inputs: inputs({ failOn: 'LOW' }),
         agent,
         scanIndex: 0,
@@ -432,6 +465,7 @@ describe('Fix 6: every policy violation is reported together', () => {
       resolveConfig({
         defaults: { ...defaults, allowOverrides: ['scanners'] },
         runners,
+        databases,
         inputs: inputs({ runner: 'hardened', failOn: 'LOW' }),
         agent,
         scanIndex: 0,
@@ -449,5 +483,114 @@ describe('Fix 6: every policy violation is reported together', () => {
     expect(thrown!.message).toMatch(/runner/);
     expect(thrown!.message).toMatch(/failOn/);
     expect(thrown!.message).toMatch(/scanners/);
+  });
+});
+
+describe('database catalogue resolution', () => {
+  const runnerWithDatabase: RunnerConfig[] = [
+    { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true, database: 'mirror' },
+  ];
+
+  const catalogue: DatabaseConfig[] = [
+    {
+      alias: 'mirror',
+      repository: 'registry.example.com/custom-trivy-db:1',
+      javaRepository: 'registry.example.com/custom-trivy-java-db:1',
+      registryUsername: 'db-svc',
+      registryPassword: 'db-p@ss',
+    },
+  ];
+
+  it("resolves the named database's repository, javaRepository and credentials", () => {
+    const config = resolveConfig({
+      defaults: {},
+      runners: runnerWithDatabase,
+      databases: catalogue,
+      inputs: inputs(),
+      agent,
+      scanIndex: 0,
+    });
+
+    expect(config.dbRepository).toBe('registry.example.com/custom-trivy-db:1');
+    expect(config.javaDbRepository).toBe('registry.example.com/custom-trivy-java-db:1');
+    expect(config.dbRegistryUsername).toBe('db-svc');
+    expect(config.dbRegistryPassword).toBe('db-p@ss');
+    expect(config.usedDeprecatedDatabaseFallback).toBe(false);
+  });
+
+  it('fails naming the known aliases when the runner names a database that does not exist', () => {
+    expect(() =>
+      resolveConfig({
+        defaults: {},
+        runners: [{ ...runnerWithDatabase[0], database: 'nope' }],
+        databases: catalogue,
+        inputs: inputs(),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(DatabaseNotFoundError);
+
+    expect(() =>
+      resolveConfig({
+        defaults: {},
+        runners: [{ ...runnerWithDatabase[0], database: 'nope' }],
+        databases: catalogue,
+        inputs: inputs(),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(/Database "nope" does not exist\. Known databases: mirror\./);
+  });
+
+  it('names that no databases are configured at all when the runner names one and the catalogue is empty', () => {
+    expect(() =>
+      resolveConfig({
+        defaults: {},
+        runners: [{ ...runnerWithDatabase[0], database: 'nope' }],
+        databases: [],
+        inputs: inputs(),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(/Database "nope" does not exist, and no databases are currently configured\./);
+  });
+
+  it('falls back to the deprecated defaults fields when the runner names no database, and reports the fallback', () => {
+    const config = resolveConfig({
+      defaults: { dbRepository: 'registry.example.com/trivy-db:2', javaDbRepository: 'registry.example.com/trivy-java-db:1' },
+      runners, // shared fixture: no `database` set on any runner
+      databases: catalogue,
+      inputs: inputs(),
+      agent,
+      scanIndex: 0,
+    });
+
+    expect(config.dbRepository).toBe('registry.example.com/trivy-db:2');
+    expect(config.javaDbRepository).toBe('registry.example.com/trivy-java-db:1');
+    expect(config.usedDeprecatedDatabaseFallback).toBe(true);
+  });
+
+  it('fails with an actionable message when the runner names no database and defaults has no dbRepository either', () => {
+    expect(() =>
+      resolveConfig({
+        defaults: {},
+        runners,
+        databases: [],
+        inputs: inputs(),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(DatabaseNotFoundError);
+
+    expect(() =>
+      resolveConfig({
+        defaults: {},
+        runners,
+        databases: [],
+        inputs: inputs(),
+        agent,
+        scanIndex: 0,
+      }),
+    ).toThrow(/Runner "baseline" has no database linked.*Link a database to this runner/s);
   });
 });

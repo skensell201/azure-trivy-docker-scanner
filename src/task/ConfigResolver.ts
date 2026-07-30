@@ -1,6 +1,7 @@
 import * as path from 'path';
 import {
   AgentContext,
+  DatabaseConfig,
   DefaultsConfig,
   OverridableField,
   ResolvedScanConfig,
@@ -10,6 +11,37 @@ import {
 
 export class PolicyViolationError extends Error {}
 export class RunnerNotFoundError extends Error {}
+export class DatabaseNotFoundError extends Error {}
+
+/**
+ * `ResolvedScanConfig` (shared/types.ts) carries `dbRepository`/`javaDbRepository` but no
+ * credentials or provenance -- shared/ is off limits for this change, and neither field
+ * belongs there anyway: they exist only so the resolver (which has no publisher) can tell
+ * its caller (run.ts, which has one) what it decided, without recomputing the decision.
+ * Extending by intersection rather than editing the shared interface keeps every other
+ * field's shape, and every existing consumer typed against `ResolvedScanConfig` (DockerCommand,
+ * mainly), unchanged: this is a strict superset, so it is assignable wherever a plain
+ * `ResolvedScanConfig` is expected.
+ */
+export type ResolvedConfigWithDatabase = ResolvedScanConfig & {
+  /**
+   * Credentials paired with `dbRepository`/`javaDbRepository`, from whichever source
+   * resolved them (the named database's catalogue entry, or -- on fallback -- `DefaultsConfig`'s
+   * deprecated `dbRegistryUsername`/`dbRegistryPassword`). Named to match those deprecated
+   * fields rather than `RegistryCredentials` (DockerCommand.ts) so this file need not import
+   * from DockerCommand just for a type.
+   */
+  dbRegistryUsername?: string;
+  dbRegistryPassword?: string;
+  /**
+   * True when the selected runner named no `database` and dbRepository/javaDbRepository/
+   * credentials came from `DefaultsConfig`'s deprecated fields instead of a catalogue entry.
+   * The resolver is pure and has no publisher, so it cannot itself warn about this -- run.ts,
+   * which does have one, is the one place that turns this flag into a warning naming
+   * `config.runner.alias`.
+   */
+  usedDeprecatedDatabaseFallback: boolean;
+};
 
 /**
  * `satisfies Record<OverridableField, true>` makes this map exhaustive at
@@ -37,9 +69,72 @@ const ALL_OVERRIDABLE: OverridableField[] = Object.keys(ALL_OVERRIDABLE_FIELDS) 
 export interface ResolveArgs {
   defaults: DefaultsConfig;
   runners: RunnerConfig[];
+  databases: DatabaseConfig[];
   inputs: TaskInputs;
   agent: AgentContext;
   scanIndex: number;
+}
+
+interface DatabaseResolution {
+  dbRepository: string;
+  javaDbRepository?: string;
+  dbRegistryUsername?: string;
+  dbRegistryPassword?: string;
+  usedDeprecatedDatabaseFallback: boolean;
+}
+
+/**
+ * Resolves the vulnerability database for the selected runner. A database is a property of
+ * the runner, not the collection (see `DatabaseConfig`'s doc comment in shared/types.ts): the
+ * runner names a catalogue entry by alias, or -- for a runner written before the catalogue
+ * existed -- falls back to `DefaultsConfig`'s deprecated fields. There is no "default
+ * database" to fall back to silently; the fallback is reported via
+ * `usedDeprecatedDatabaseFallback` rather than logged here, since this function is pure and
+ * has no publisher -- run.ts decides whether and how to warn about it.
+ */
+function resolveDatabase(
+  databases: DatabaseConfig[],
+  runner: RunnerConfig,
+  defaults: DefaultsConfig,
+): DatabaseResolution {
+  if (runner.database !== undefined) {
+    const match = databases.find((database) => database.alias === runner.database);
+    if (!match) {
+      if (databases.length === 0) {
+        throw new DatabaseNotFoundError(
+          `Database "${runner.database}" does not exist, and no databases are currently configured.`,
+        );
+      }
+      throw new DatabaseNotFoundError(
+        `Database "${runner.database}" does not exist. Known databases: ${databases
+          .map((database) => database.alias)
+          .join(', ')}.`,
+      );
+    }
+    return {
+      dbRepository: match.repository,
+      javaDbRepository: match.javaRepository,
+      dbRegistryUsername: match.registryUsername,
+      dbRegistryPassword: match.registryPassword,
+      usedDeprecatedDatabaseFallback: false,
+    };
+  }
+
+  if (!defaults.dbRepository) {
+    throw new DatabaseNotFoundError(
+      `Runner "${runner.alias}" has no database linked, and the collection has no deprecated ` +
+        'dbRepository default either. Link a database to this runner in Collection Settings > ' +
+        'Trivy Scanner > Runners.',
+    );
+  }
+
+  return {
+    dbRepository: defaults.dbRepository,
+    javaDbRepository: defaults.javaDbRepository,
+    dbRegistryUsername: defaults.dbRegistryUsername,
+    dbRegistryPassword: defaults.dbRegistryPassword,
+    usedDeprecatedDatabaseFallback: true,
+  };
 }
 
 interface PolicyViolation {
@@ -48,8 +143,8 @@ interface PolicyViolation {
   enforcedValue: unknown;
 }
 
-export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
-  const { defaults, runners, inputs, agent, scanIndex } = args;
+export function resolveConfig(args: ResolveArgs): ResolvedConfigWithDatabase {
+  const { defaults, runners, databases, inputs, agent, scanIndex } = args;
   const allowed = defaults.allowOverrides ?? ALL_OVERRIDABLE;
   const violations: PolicyViolation[] = [];
 
@@ -90,7 +185,14 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     violations.push({ field: 'runner', enforcedValue: runner.alias });
   }
 
-  const config: ResolvedScanConfig = {
+  // Resolved for whichever runner ends up selected above, including the enforced-default
+  // case where a policy-rejected override still needs a database resolved for it: same
+  // "throws immediately, ahead of the batched policy violations" treatment as selectRunner
+  // itself gets, for the same reason (a bad database link is a distinct problem from an
+  // overridden field, not one to silently paper over while other violations are collected).
+  const database = resolveDatabase(databases, runner, defaults);
+
+  const config: ResolvedConfigWithDatabase = {
     runner,
     scanType: inputs.scanType,
     target: inputs.target,
@@ -100,8 +202,11 @@ export function resolveConfig(args: ResolveArgs): ResolvedScanConfig {
     ignoreUnfixed: pick('ignoreUnfixed', defaults.ignoreUnfixed ?? false),
     skipDbUpdate: pick('skipDbUpdate', defaults.skipDbUpdate ?? false),
     timeoutMinutes: pick('timeoutMinutes', defaults.timeoutMinutes ?? 10),
-    dbRepository: defaults.dbRepository,
-    javaDbRepository: defaults.javaDbRepository,
+    dbRepository: database.dbRepository,
+    javaDbRepository: database.javaDbRepository,
+    dbRegistryUsername: database.dbRegistryUsername,
+    dbRegistryPassword: database.dbRegistryPassword,
+    usedDeprecatedDatabaseFallback: database.usedDeprecatedDatabaseFallback,
     cacheDir: defaults.cacheDir ?? path.posix.join(agent.agentHomeDir, '_trivy-cache'),
     sourcesDir: agent.sourcesDir,
     workingDirectory: inputs.workingDirectory,

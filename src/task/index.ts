@@ -8,8 +8,15 @@ import { ChildProcessRunner } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { runScan } from './run';
 import { selectOsCaBundlePath } from './trustSource';
-import { validateCatalog, validateDefaults, validateRunner } from '../shared/validation';
-import { AgentContext, DefaultsConfig, RunnerConfig } from '../shared/types';
+import {
+  validateCatalog,
+  validateDatabase,
+  validateDatabaseCatalogue,
+  validateDefaults,
+  validateRunner,
+  validateRunnerDatabaseLinks,
+} from '../shared/validation';
+import { AgentContext, DatabaseConfig, DefaultsConfig, RunnerConfig } from '../shared/types';
 
 /**
  * Well-known locations for the operating system's CA trust bundle, in the order they are tried.
@@ -199,16 +206,25 @@ async function main(): Promise<void> {
     const client = buildConfigClient();
     const runners = (await client.readDocument<RunnerConfig[]>('runners')) ?? [];
     const defaults = await client.readDocument<DefaultsConfig>('defaults');
+    // Same "404 means not configured yet" treatment as `runners` above: an administrator who
+    // has not saved a database catalogue yet is not an error, just an empty one (see
+    // ConfigClient.readDocument's own doc comment on why 404 is the only path this applies to).
+    const databases = (await client.readDocument<DatabaseConfig[]>('databases')) ?? [];
 
     // Both passwords are entered once by an administrator directly into the settings
-    // document (see RunnerConfig/DefaultsConfig doc comments) and are stored there in
-    // plain text - the Extension Data Service is not a secret store. Registering them
+    // document (see RunnerConfig/DefaultsConfig/DatabaseConfig doc comments) and are stored
+    // there in plain text - the Extension Data Service is not a secret store. Registering them
     // with tl.setSecret here, as early as possible after they are read and before any
     // validation or scan step can log anything, makes the agent mask them out of every
     // log line for the rest of this run if either one is ever echoed anywhere.
     for (const runner of runners) {
       if (runner.registryPassword) {
         tl.setSecret(runner.registryPassword);
+      }
+    }
+    for (const database of databases) {
+      if (database.registryPassword) {
+        tl.setSecret(database.registryPassword);
       }
     }
     if (defaults?.dbRegistryPassword) {
@@ -233,6 +249,14 @@ async function main(): Promise<void> {
           message: issue.message,
         })),
       ),
+      ...validateDatabaseCatalogue(databases),
+      ...databases.flatMap((database, index) =>
+        validateDatabase(database).map((issue) => ({
+          field: `databases[${index}].${issue.field}`,
+          message: issue.message,
+        })),
+      ),
+      ...validateRunnerDatabaseLinks(runners, databases),
     ];
     if (issues.length > 0) {
       throw new Error(
@@ -245,6 +269,7 @@ async function main(): Promise<void> {
     const { gate } = await runScan({
       defaults,
       runners,
+      databases,
       inputs: readInputs(),
       agent: agentContext(),
       scanIndex: nextScanIndex(),

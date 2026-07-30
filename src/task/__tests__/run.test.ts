@@ -4,7 +4,7 @@ import * as path from 'path';
 import { runScan } from '../run';
 import { ProcessResult, ProcessRunner, RunOptions } from '../ProcessRunner';
 import { Publisher } from '../Publisher';
-import { AgentContext, DefaultsConfig, RunnerConfig, TaskInputs } from '../../shared/types';
+import { AgentContext, DatabaseConfig, DefaultsConfig, RunnerConfig, TaskInputs } from '../../shared/types';
 
 class FakeRunner implements ProcessRunner {
   calls: { command: string; args: string[]; options?: RunOptions }[] = [];
@@ -36,10 +36,24 @@ class FakeRunner implements ProcessRunner {
   }
 }
 
-const runners: RunnerConfig[] = [
-  { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+// The runner names a catalogued database (the current, non-deprecated model), so the bulk of
+// this suite -- which is about docker exit codes, timeouts, extra formats, JUnit output, and
+// so on, not about database resolution -- never takes the deprecated dbRepository fallback and
+// never emits the fallback warning. The dedicated "database credentials" and "deprecated
+// database fallback" describe blocks below are what exercise the fallback path itself.
+const databases: DatabaseConfig[] = [
+  { alias: 'default-db', repository: 'registry.example.com/trivy-db:2' },
 ];
-const defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
+const runners: RunnerConfig[] = [
+  {
+    alias: 'baseline',
+    image: 'registry.example.com/trivy:0.58.1',
+    isDefault: true,
+    enabled: true,
+    database: 'default-db',
+  },
+];
+const defaults: DefaultsConfig = {};
 const inputs: TaskInputs = { scanType: 'image', target: 'app:1.4.2' };
 
 let workspace: string;
@@ -123,6 +137,7 @@ const invoke = (runner: ProcessRunner) =>
   runScan({
     defaults,
     runners,
+    databases,
     inputs,
     agent,
     scanIndex: 0,
@@ -278,6 +293,7 @@ describe('runScan', () => {
     await runScan({
       defaults,
       runners,
+      databases,
       inputs: { ...inputs, publishArtifact: false },
       agent,
       scanIndex: 0,
@@ -302,6 +318,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...inputs, publishTestResults: true },
         agent,
         scanIndex: 0,
@@ -326,6 +343,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...inputs, publishTestResults: false },
         agent,
         scanIndex: 0,
@@ -355,6 +373,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...inputs, publishTestResults: true },
         agent,
         scanIndex: 0,
@@ -379,6 +398,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...inputs, publishTestResults: true },
         agent,
         scanIndex: 0,
@@ -421,6 +441,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...inputs, publishTestResults: true },
         agent,
         scanIndex: 0,
@@ -526,6 +547,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -734,6 +756,7 @@ describe('runScan', () => {
       runScan({
         defaults,
         runners,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -744,6 +767,7 @@ describe('runScan', () => {
       runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...inputs, target: 'app:2.0.0' },
         agent,
         scanIndex: 1,
@@ -799,6 +823,7 @@ describe('runScan', () => {
           runScan({
             defaults,
             runners,
+            databases,
             inputs,
             agent: { ...agent, agentHomeDir: readonlyParent },
             scanIndex: 0,
@@ -828,6 +853,7 @@ describe('runScan', () => {
           runScan({
             defaults,
             runners,
+            databases,
             inputs,
             agent: { ...agent, sourcesDir: readonlySources },
             scanIndex: 0,
@@ -891,6 +917,7 @@ describe('runScan', () => {
     await runScan({
       defaults,
       runners,
+      databases,
       inputs: { ...inputs, formats: ['json', 'sarif'] },
       agent,
       scanIndex: 0,
@@ -907,6 +934,7 @@ describe('runScan', () => {
     await runScan({
       defaults,
       runners,
+      databases,
       inputs: { ...inputs, generateSbom: 'cyclonedx' },
       agent,
       scanIndex: 0,
@@ -927,6 +955,7 @@ describe('runScan', () => {
     const result = await runScan({
       defaults,
       runners,
+      databases,
       inputs: { ...inputs, formats: ['json', 'sarif'] },
       agent,
       scanIndex: 0,
@@ -947,6 +976,7 @@ describe('runScan', () => {
     await runScan({
       defaults,
       runners,
+      databases,
       inputs: { ...inputs, formats: ['json', 'sarif'] },
       agent,
       scanIndex: 0,
@@ -971,6 +1001,7 @@ describe('runScan', () => {
     await runScan({
       defaults,
       runners,
+      databases,
       inputs: { ...inputs, formats: ['json', 'sarif'], generateSbom: 'cyclonedx' },
       agent,
       scanIndex: 0,
@@ -997,6 +1028,7 @@ describe('runScan', () => {
         enabled: true,
         registryUsername: 'svc-runner',
         registryPassword: 'runner-p@ss',
+        database: 'default-db',
       },
     ];
 
@@ -1011,6 +1043,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners: runnersWithCreds,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1037,6 +1070,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners: runnersWithCreds,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1054,6 +1088,7 @@ describe('runScan', () => {
         runners: [
           { ...runnersWithCreds[0], image: 'registry.example.com:5000/trivy:0.58.1' },
         ],
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1068,7 +1103,7 @@ describe('runScan', () => {
       const runner = new FakeRunner(writeReport);
       await runScan({
         defaults,
-        runners: [{ ...runnersWithCreds[0], image: 'nginx:1.25' }],
+        runners: [{ ...runnersWithCreds[0], image: 'nginx:1.25' }], databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1096,6 +1131,7 @@ describe('runScan', () => {
       const result = await runScan({
         defaults,
         runners: runnersWithCreds,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1131,6 +1167,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners: runnersWithCreds,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1146,7 +1183,7 @@ describe('runScan', () => {
     });
   });
 
-  describe('database mirror credentials vs. target-image credentials (TRIVY_USERNAME/TRIVY_PASSWORD collision)', () => {
+  describe('database credentials vs. target-image credentials (TRIVY_USERNAME/TRIVY_PASSWORD collision)', () => {
     const captureEnvFile = (sink: { content: string }) => (args: string[]) => {
       const envIndex = args.indexOf('--env-file');
       if (envIndex !== -1) {
@@ -1155,12 +1192,24 @@ describe('runScan', () => {
       writeReport();
     };
 
-    it('uses the database mirror credentials when no target-image credentials were supplied', async () => {
+    // The catalogued database (the current, non-deprecated model) carries its own
+    // credentials, resolved by ConfigResolver onto `dbRegistryUsername`/`dbRegistryPassword`.
+    const databasesWithCreds: DatabaseConfig[] = [
+      {
+        alias: 'default-db',
+        repository: 'registry.example.com/trivy-db:2',
+        registryUsername: 'db-svc',
+        registryPassword: 'db-p@ss',
+      },
+    ];
+
+    it('uses the database credentials when no target-image credentials were supplied', async () => {
       const sink = { content: '' };
       const runner = new FakeRunner(captureEnvFile(sink));
       await runScan({
-        defaults: { ...defaults, dbRegistryUsername: 'db-svc', dbRegistryPassword: 'db-p@ss' },
+        defaults,
         runners,
+        databases: databasesWithCreds,
         inputs,
         agent,
         scanIndex: 0,
@@ -1170,15 +1219,19 @@ describe('runScan', () => {
       });
       expect(sink.content).toContain('TRIVY_USERNAME=db-svc');
       expect(sink.content).toContain('TRIVY_PASSWORD=db-p@ss');
+      // The TRIVY_* environment also carries the resolved database's repository, regardless
+      // of where its credentials came from.
+      expect(sink.content).toContain('TRIVY_DB_REPOSITORY=registry.example.com/trivy-db:2');
       expect(lines.some((line) => line.includes('type=warning'))).toBe(false);
     });
 
-    it('prefers target-image credentials over database mirror credentials and warns about the collision', async () => {
+    it('prefers target-image credentials over database credentials and warns about the collision', async () => {
       const sink = { content: '' };
       const runner = new FakeRunner(captureEnvFile(sink));
       await runScan({
-        defaults: { ...defaults, dbRegistryUsername: 'db-svc', dbRegistryPassword: 'db-p@ss' },
+        defaults,
         runners,
+        databases: databasesWithCreds,
         inputs,
         agent,
         scanIndex: 0,
@@ -1193,18 +1246,17 @@ describe('runScan', () => {
       expect(
         lines.some(
           (line) =>
-            line.includes('type=warning') &&
-            /database.mirror|dbRegistry/i.test(line) &&
-            /target/i.test(line),
+            line.includes('type=warning') && /database/i.test(line) && /target/i.test(line),
         ),
       ).toBe(true);
     });
 
-    it('does not warn when only target-image credentials are supplied and no database mirror credentials exist', async () => {
+    it('does not warn when only target-image credentials are supplied and no database credentials exist', async () => {
       const runner = new FakeRunner(writeReport);
       await runScan({
         defaults,
         runners,
+        databases,
         inputs,
         agent,
         scanIndex: 0,
@@ -1213,6 +1265,65 @@ describe('runScan', () => {
         credentials: { username: 'target-svc', password: 'target-p@ss' },
       });
       expect(lines.some((line) => line.includes('type=warning'))).toBe(false);
+    });
+
+    // Backward-compat: a runner written before the catalogue existed (no `database` set)
+    // still gets its credentials from the deprecated dbRegistryUsername/dbRegistryPassword
+    // defaults, and the collision rule still holds for that path too.
+    it('falls back to the deprecated dbRegistryUsername/dbRegistryPassword credentials when the runner has no database', async () => {
+      const sink = { content: '' };
+      const runner = new FakeRunner(captureEnvFile(sink));
+      const runnerWithNoDatabase: RunnerConfig[] = [
+        { alias: 'legacy-runner', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+      ];
+      await runScan({
+        defaults: {
+          dbRepository: 'registry.example.com/trivy-db:2',
+          dbRegistryUsername: 'db-svc',
+          dbRegistryPassword: 'db-p@ss',
+        },
+        runners: runnerWithNoDatabase,
+        databases: [],
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+      expect(sink.content).toContain('TRIVY_USERNAME=db-svc');
+      expect(sink.content).toContain('TRIVY_PASSWORD=db-p@ss');
+    });
+  });
+
+  describe('deprecated database fallback warning', () => {
+    const runnerWithNoDatabase: RunnerConfig[] = [
+      { alias: 'legacy-runner', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+    ];
+
+    it('warns exactly once, naming the runner, when the runner has no database and defaults falls back', async () => {
+      const runner = new FakeRunner(writeReport);
+      await runScan({
+        defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
+        runners: runnerWithNoDatabase,
+        databases: [],
+        inputs,
+        agent,
+        scanIndex: 0,
+        processRunner: runner,
+        publisher: new Publisher((line) => lines.push(line)),
+        credentials: {},
+      });
+
+      const deprecationWarnings = lines.filter(
+        (line) => line.includes('type=warning') && /deprecated/i.test(line) && line.includes('legacy-runner'),
+      );
+      expect(deprecationWarnings).toHaveLength(1);
+    });
+
+    it('does not warn about the deprecated fallback when the runner names a catalogued database', async () => {
+      await invoke(new FakeRunner(writeReport));
+      expect(lines.some((line) => line.includes('type=warning') && /deprecated/i.test(line))).toBe(false);
     });
   });
 
@@ -1239,6 +1350,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: copyInputs,
         agent,
         scanIndex: 0,
@@ -1254,6 +1366,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: copyInputs,
         agent,
         scanIndex: 0,
@@ -1269,6 +1382,7 @@ describe('runScan', () => {
       const result = await runScan({
         defaults,
         runners,
+        databases,
         inputs: copyInputs,
         agent,
         scanIndex: 0,
@@ -1291,6 +1405,7 @@ describe('runScan', () => {
         runScan({
           defaults,
           runners,
+          databases,
           inputs: copyInputs,
           agent,
           scanIndex: 0,
@@ -1313,6 +1428,7 @@ describe('runScan', () => {
         runScan({
           defaults,
           runners,
+          databases,
           inputs: copyInputs,
           agent,
           scanIndex: 0,
@@ -1335,6 +1451,7 @@ describe('runScan', () => {
       const result = await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...copyInputs, formats: ['json', 'sarif'] },
         agent,
         scanIndex: 0,
@@ -1368,6 +1485,7 @@ describe('runScan', () => {
       await runScan({
         defaults,
         runners,
+        databases,
         inputs: { ...copyInputs, generateSbom: 'cyclonedx' },
         agent,
         scanIndex: 0,

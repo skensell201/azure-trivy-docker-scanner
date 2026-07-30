@@ -63,7 +63,7 @@ describe('scan against a fake docker binary', () => {
     const lines: string[] = [];
     const result = await runScan({
       defaults: { dbRepository: 'registry.example.com/trivy-db:2', failOn: 'HIGH' },
-      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,
@@ -89,7 +89,7 @@ describe('scan against a fake docker binary', () => {
   it('passes the image and the mounts to docker exactly once', async () => {
     await runScan({
       defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,
@@ -113,7 +113,7 @@ describe('scan against a fake docker binary', () => {
   it('leaves no env file behind', async () => {
     await runScan({
       defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,
@@ -138,7 +138,7 @@ describe('scan against a fake docker binary', () => {
   it('carries registry credentials to the container through the env file, not through argv', async () => {
     await runScan({
       defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
       inputs: { scanType: 'image', target: 'app:1.4.2' },
       agent: {
         sourcesDir: workspace,
@@ -169,7 +169,7 @@ describe('scan against a fake docker binary', () => {
     const lines: string[] = [];
     await runScan({
       defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+      runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
       inputs: { scanType: 'image', target: 'app:1.4.2', formats: ['json', 'sarif'] },
       agent: {
         sourcesDir: workspace,
@@ -200,7 +200,7 @@ describe('scan against a fake docker binary', () => {
       const lines: string[] = [];
       const result = await runScan({
         defaults: { dbRepository: 'registry.example.com/trivy-db:2', failOn: 'HIGH' },
-        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
         inputs: { scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' },
         agent: {
           sourcesDir: workspace,
@@ -231,7 +231,7 @@ describe('scan against a fake docker binary', () => {
     it('never mounts the sources directory or the cache directory into the scan container', async () => {
       await runScan({
         defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
         inputs: { scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' },
         agent: {
           sourcesDir: workspace,
@@ -255,7 +255,7 @@ describe('scan against a fake docker binary', () => {
     it('reads the report from the host path after a real docker cp copies it out', async () => {
       await runScan({
         defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
         inputs: { scanType: 'image', target: 'app:1.4.2', sourceTransfer: 'copy' },
         agent: {
           sourcesDir: workspace,
@@ -279,7 +279,7 @@ describe('scan against a fake docker binary', () => {
       const lines: string[] = [];
       await runScan({
         defaults: { dbRepository: 'registry.example.com/trivy-db:2' },
-        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }],
+        runners: [{ alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true }], databases: [],
         inputs: {
           scanType: 'image',
           target: 'app:1.4.2',

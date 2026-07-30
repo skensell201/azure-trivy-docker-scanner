@@ -29,6 +29,7 @@ import { Publisher } from './Publisher';
 import { parseTrivyReport, parseVersion } from './ReportParser';
 import {
   AgentContext,
+  DatabaseConfig,
   DefaultsConfig,
   NormalizedReport,
   ResolvedScanConfig,
@@ -217,25 +218,29 @@ async function loginToRunnerRegistry(
  * everything) - so when both sources are configured, only one can actually be presented,
  * and the choice must be explicit rather than one silently overwriting the other:
  * the target image's credentials win, since they are specific to *this* scan, and the
- * database-mirror credentials are dropped with a warning explaining why.
+ * database credentials are dropped with a warning explaining why.
+ *
+ * `databaseCredentials` is whatever `ConfigResolver.resolveDatabase` resolved -- the named
+ * catalogue entry's `registryUsername`/`registryPassword`, or, on the deprecated fallback,
+ * `DefaultsConfig.dbRegistryUsername`/`dbRegistryPassword` -- not read from `DefaultsConfig`
+ * directly any more: the resolver is what knows which source actually won.
  */
 function resolveTrivyCredentials(
-  defaults: DefaultsConfig,
+  databaseCredentials: RegistryCredentials,
   targetCredentials: RegistryCredentials,
   publisher: Publisher,
 ): RegistryCredentials {
   const hasTargetCredentials = Boolean(targetCredentials.username || targetCredentials.password);
-  const hasDbMirrorCredentials = Boolean(
-    defaults.dbRegistryUsername || defaults.dbRegistryPassword,
-  );
+  const hasDatabaseCredentials = Boolean(databaseCredentials.username || databaseCredentials.password);
 
-  if (hasTargetCredentials && hasDbMirrorCredentials) {
+  if (hasTargetCredentials && hasDatabaseCredentials) {
     publisher.warn(
-      'Both a target-image registry connection (targetRegistryConnection) and database-mirror ' +
-        'credentials (dbRegistryUsername/dbRegistryPassword) are configured. Trivy reads a ' +
-        'single TRIVY_USERNAME/TRIVY_PASSWORD pair from its environment for both purposes, so ' +
-        'only one can be presented for this scan: the target image credentials are used, and ' +
-        'the database-mirror credentials are ignored.',
+      'Both a target-image registry connection (targetRegistryConnection) and database ' +
+        'credentials (from the runner\'s linked database, or the deprecated dbRegistryUsername/ ' +
+        'dbRegistryPassword defaults) are configured. Trivy reads a single TRIVY_USERNAME/' +
+        'TRIVY_PASSWORD pair from its environment for both purposes, so only one can be ' +
+        'presented for this scan: the target image credentials are used, and the database ' +
+        'credentials are ignored.',
     );
     return targetCredentials;
   }
@@ -244,7 +249,7 @@ function resolveTrivyCredentials(
     return targetCredentials;
   }
 
-  return { username: defaults.dbRegistryUsername, password: defaults.dbRegistryPassword };
+  return databaseCredentials;
 }
 
 /**
@@ -309,6 +314,7 @@ async function runContainerized(
 export interface RunScanArgs {
   defaults: DefaultsConfig;
   runners: RunnerConfig[];
+  databases: DatabaseConfig[];
   inputs: TaskInputs;
   agent: AgentContext;
   scanIndex: number;
@@ -331,10 +337,25 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   const config = resolveConfig({
     defaults: args.defaults,
     runners: args.runners,
+    databases: args.databases,
     inputs: args.inputs,
     agent: args.agent,
     scanIndex: args.scanIndex,
   });
+
+  // The resolver is pure and has no publisher (see ResolvedConfigWithDatabase's doc comment
+  // in ConfigResolver.ts), so it can only report that the deprecated fallback was taken, not
+  // warn about it itself. This is the one place with a publisher, so it is the one place that
+  // turns the flag into an actionable warning naming the runner that still needs migrating.
+  if (config.usedDeprecatedDatabaseFallback) {
+    publisher.warn(
+      `Runner "${config.runner.alias}" has no database linked, so this scan used the ` +
+        "collection's deprecated dbRepository/javaDbRepository (and dbRegistryUsername/" +
+        'dbRegistryPassword, if set) defaults instead. Link a database to this runner in the ' +
+        'admin hub (Collection Settings > Trivy Scanner > Runners) before those deprecated ' +
+        'fields are removed.',
+    );
+  }
 
   // Created before the version probe below: buildVersionArgs bind-mounts cacheDir, and if
   // that directory does not exist yet, docker itself creates it on a first run -- as root.
@@ -359,7 +380,11 @@ export async function runScan(args: RunScanArgs): Promise<RunScanResult> {
   // Resolved once, before the version probe, since the message dbDownloadFailureMessage
   // builds below (on the scan path) and the env file (also below) both need the same
   // decision about which credentials actually reached TRIVY_USERNAME/TRIVY_PASSWORD.
-  const trivyCredentials = resolveTrivyCredentials(args.defaults, args.credentials, publisher);
+  const trivyCredentials = resolveTrivyCredentials(
+    { username: config.dbRegistryUsername, password: config.dbRegistryPassword },
+    args.credentials,
+    publisher,
+  );
 
   // The version probe is decoration (see ReportParser.parseVersion): a garbled response
   // already cannot fail the scan below, and neither can the probe call itself throwing
