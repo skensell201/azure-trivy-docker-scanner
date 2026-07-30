@@ -27,10 +27,59 @@ Windows agents are not supported in v1.
 
 Administration is collection-wide, not per-project: there is one runner catalog and one set of
 severity/gate defaults for the whole Azure DevOps collection, and every project's pipelines
-consume the same catalog and defaults. There is no per-project configuration. This version has
-no administration UI: you configure the collection-wide settings by writing two JSON documents
-directly through the Azure DevOps Extension Data REST API. An administration UI for this is
-planned for a later release.
+consume the same catalog and defaults. There is no per-project configuration.
+
+### Admin hub (Collection Settings > Trivy Scanner)
+
+The primary way to configure the collection-wide settings is the **Trivy Scanner** hub: open
+**Collection Settings** (the gear icon, top right of any project) and pick **Trivy Scanner** from
+the left-hand navigation. The hub has three tabs, each backed by the same validation rules the
+task itself applies (`src/shared/validation.ts`), so a setting that would fail in the pipeline is
+rejected in the form instead:
+
+- **Runners** — the runner catalog: add, edit, enable/disable and delete entries. Each runner has
+  an `alias`, an `image` (with an explicit tag or a digest, never `latest`), optional
+  `displayName`/`description`/`extraDockerArgs`, an `isDefault` flag (exactly one enabled runner
+  must be default), an `enabled` flag, and an optional `registryUsername`/`registryPassword` pair
+  for pulling the image from a private registry.
+- **Defaults** — the `defaults` document: `dbRepository` (the only required field, since agents
+  have no internet access), plus `severities`, `scanners`, `failOn`, `timeoutMinutes`,
+  `ignoreUnfixed`, `skipDbUpdate`, `javaDbRepository`, `cacheDir`, and
+  `dbRegistryUsername`/`dbRegistryPassword` for the database-mirror registry.
+- **Policy** — `allowOverrides`: a checkbox per overridable pipeline input
+  (`src/shared/types.ts`'s `OverridableField`). Leaving a box unchecked means a pipeline's own
+  input for that field is rejected and the collection's default is enforced instead.
+
+The runner and database-mirror password fields never display a saved value: once a password is
+set, the field shows "a password is stored" and a **Replace password** button instead of the
+value itself, so opening the form cannot leak the credential and saving it back without touching
+that field cannot blank it out. The form also repeats, next to the field, the same warning given
+below: **the password is stored in clear text** in the extension settings document and is
+readable by anyone with extension-data read access to this collection.
+
+Saves are read-modify-write against the document's `__etag`: if another administrator saved
+between your load and your save, the hub tells you someone else changed the settings instead of
+silently overwriting their edit — reload the page to see the current version, then reapply your
+change.
+
+#### Approving the raised permission on upgrade
+
+Starting with `0.2.0` the extension requests `vso.extension.data_write` (previously
+`vso.extension.data`, read-only), because the hub now writes the settings documents that used to
+be written by hand. Raising a scope is not silent: Azure DevOps requires a collection
+administrator to **approve the updated permissions** before the new version takes effect. If
+`0.2.0` is installed without that approval, the hub fails to load and says so explicitly (an
+error naming the failure, not an endless spinner) instead of pretending to work. To approve it,
+go to **Organization/Collection Settings > Extensions**, find **Trivy Docker Scanner**, and accept
+the permission prompt shown there (Azure DevOps Server surfaces this as a banner or an "Update"
+action on the extension's row); then reload the hub page.
+
+### Configuring via the REST API (alternative, for scripting)
+
+The hub covers everything an administrator needs interactively. The same two settings documents
+can still be read and written directly through the Azure DevOps Extension Data REST API — this
+keeps working after `0.2.0` and remains useful for scripted or bulk changes, but it is no longer
+the primary path.
 
 Both documents live in the extension's `%24settings` collection (`%24` is the URL-encoded `$`
 that the Extension Data Service requires in the collection name). Set these once:
@@ -41,7 +90,7 @@ export PAT="<pat-with-extension-data-scope>"
 export PUB="iksoftware"; export EXT="trivy-docker-scanner"
 ```
 
-### `runners` — the runner catalog
+#### `runners` — the runner catalog
 
 ```bash
 curl -sS -u ":$PAT" -X PUT \
@@ -65,7 +114,7 @@ extension-data read access to this collection (the same access that lets someone
 back with the `curl` command above). Grant that access accordingly, and prefer a scoped
 service/robot account over a personal one for `registryUsername`.
 
-### `defaults` — severity, gate and database defaults
+#### `defaults` — severity, gate and database defaults
 
 ```bash
 curl -sS -u ":$PAT" -X PUT \
@@ -99,7 +148,7 @@ curl -sS -u ":$PAT" \
   "$ADO/_apis/ExtensionManagement/InstalledExtensions/$PUB/$EXT/Data/Scopes/Default/Current/Collections/%24settings/Documents/runners?api-version=3.2-preview.1"
 ```
 
-### The `configConnection` input
+#### The `configConnection` input
 
 By default the task reads both documents using the build job's own OAuth token
 (`System.AccessToken`). Whether that token is authorized to read extension data is unverified

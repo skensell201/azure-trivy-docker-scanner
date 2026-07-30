@@ -8,8 +8,10 @@ team approved.
 
 A pipeline task (`TrivyScan@1`) that runs Trivy from a chosen runner image, gates the build on
 the findings, attaches the JSON report to the build, and can publish the report (and a
-CycloneDX/SPDX SBOM) as a build artifact. There is no administration UI or build-results tab in
-this version — both are planned for a later release.
+CycloneDX/SPDX SBOM) as a build artifact. Alongside it, a **Trivy Scanner** admin hub in
+Collection Settings lets an administrator manage the runner catalog, the severity/gate defaults
+and the database-mirror settings, and the override policy — no build-results tab in this version;
+that is planned for a later release.
 
 ## Why this instead of running trivy directly
 
@@ -32,6 +34,7 @@ this version — both are planned for a later release.
     target: myapp:$(Build.BuildId)
 ```
 
-Centrally-managed settings (the runner catalog and severity/gate defaults) are configured
-through the Azure DevOps Extension Data REST API in this version — see the project README for
-the exact commands. An administration UI for this is planned.
+Centrally-managed settings (the runner catalog, severity/gate defaults and override policy) are
+configured through the **Trivy Scanner** hub in Collection Settings — see the project README for
+a walkthrough. The same settings can still be read and written through the Azure DevOps Extension
+Data REST API for scripting; the README documents that path as well.
