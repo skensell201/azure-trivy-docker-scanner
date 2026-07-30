@@ -27,6 +27,97 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * Validates an alias against ALIAS_PATTERN. Shared by `RunnerConfig.alias` and
+ * `DatabaseConfig.alias`, which are held to the identical shape rule: lowercase letters,
+ * digits and dashes, 2 to 31 characters, starting with a letter or digit.
+ */
+function validateAliasField(alias: unknown, field: string): ValidationIssue[] {
+  if (typeof alias !== 'string' || !ALIAS_PATTERN.test(alias)) {
+    return [
+      {
+        field,
+        message:
+          'Alias must be lowercase letters, digits and dashes, 2 to 31 characters, starting with a letter or digit.',
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * Validates an image-or-database reference: required, a string, and carrying either an
+ * explicit tag or an `@sha256:` digest (see DIGEST_MARKER above for why a digest is accepted
+ * regardless of what tag, if any, precedes it). Shared by `RunnerConfig.image` and
+ * `DatabaseConfig`'s `repository`/`javaRepository`, which are all held to the same
+ * reproducibility rule; only the field name, the human-readable label used in messages, and
+ * the "required" wording differ between callers.
+ */
+function validateReferenceField(
+  value: unknown,
+  field: string,
+  label: string,
+  requiredMessage: string,
+): ValidationIssue[] {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    return [{ field, message: requiredMessage }];
+  }
+
+  const reference = value.trim();
+  if (reference.includes(DIGEST_MARKER)) {
+    // Accepted deliberately: see DIGEST_MARKER comment above.
+    return [];
+  }
+
+  const tagSeparator = reference.lastIndexOf(':');
+  const hasTag = tagSeparator > reference.lastIndexOf('/');
+  if (!hasTag) {
+    return [
+      {
+        field,
+        message: `${label} must carry an explicit tag, for example registry.example.com/trivy:0.58.1.`,
+      },
+    ];
+  }
+
+  const tag = reference.slice(tagSeparator + 1);
+  if (tag === 'latest') {
+    return [{ field, message: 'The latest tag is not allowed because scans must be reproducible.' }];
+  }
+  if (!TAG_PATTERN.test(tag)) {
+    return [
+      {
+        field,
+        message: `${label} tag "${tag}" is not a valid tag; use letters, digits, dots, underscores and dashes only.`,
+      },
+    ];
+  }
+  return [];
+}
+
+/**
+ * Validates an administrator-entered-once credential pair (a registry username and
+ * password): one half set without the other is always a mistake, since docker login needs
+ * both. Shared by `RunnerConfig.registryUsername`/`registryPassword`, `DefaultsConfig`'s
+ * deprecated `dbRegistryUsername`/`dbRegistryPassword`, and `DatabaseConfig.registryUsername`/
+ * `registryPassword`.
+ */
+function validateCredentialPair(
+  username: unknown,
+  password: unknown,
+  usernameField: string,
+  passwordField: string,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  if (username !== undefined && password === undefined) {
+    issues.push({ field: passwordField, message: `${passwordField} is required when ${usernameField} is set.` });
+  }
+  if (password !== undefined && username === undefined) {
+    issues.push({ field: usernameField, message: `${usernameField} is required when ${passwordField} is set.` });
+  }
+  return issues;
+}
+
+/**
  * Minimal stand-in for `path.posix.normalize` (resolves `.`/`..` segments and collapses
  * repeated slashes), kept dependency-free rather than importing Node's `path` module: this
  * file is shared between the Node-side task and the browser-side hub bundle, and webpack 5
@@ -106,63 +197,13 @@ export function validateRunner(runner: unknown): ValidationIssue[] {
 
   const issues: ValidationIssue[] = [];
 
-  const alias = runner.alias;
-  if (typeof alias !== 'string' || !ALIAS_PATTERN.test(alias)) {
-    issues.push({
-      field: 'alias',
-      message:
-        'Alias must be lowercase letters, digits and dashes, 2 to 31 characters, starting with a letter or digit.',
-    });
-  }
+  issues.push(...validateAliasField(runner.alias, 'alias'));
+  issues.push(...validateReferenceField(runner.image, 'image', 'Image', 'Image reference is required.'));
 
-  const imageRaw = runner.image;
-  if (typeof imageRaw !== 'string' || imageRaw.trim().length === 0) {
-    issues.push({ field: 'image', message: 'Image reference is required.' });
-  } else {
-    const image = imageRaw.trim();
-    if (image.includes(DIGEST_MARKER)) {
-      // Accepted deliberately: see DIGEST_MARKER comment above.
-    } else {
-      const tagSeparator = image.lastIndexOf(':');
-      const hasTag = tagSeparator > image.lastIndexOf('/');
-      if (!hasTag) {
-        issues.push({
-          field: 'image',
-          message: 'Image must carry an explicit tag, for example registry.example.com/trivy:0.58.1.',
-        });
-      } else {
-        const tag = image.slice(tagSeparator + 1);
-        if (tag === 'latest') {
-          issues.push({
-            field: 'image',
-            message: 'The latest tag is not allowed because scans must be reproducible.',
-          });
-        } else if (!TAG_PATTERN.test(tag)) {
-          issues.push({
-            field: 'image',
-            message: `Image tag "${tag}" is not a valid tag; use letters, digits, dots, underscores and dashes only.`,
-          });
-        }
-      }
-    }
-  }
-
-  // Entered once by an administrator, not per pipeline (see RunnerConfig's doc comment):
-  // one half without the other is always a mistake, since docker login needs both.
-  const registryUsername = runner.registryUsername;
-  const registryPassword = runner.registryPassword;
-  if (registryUsername !== undefined && registryPassword === undefined) {
-    issues.push({
-      field: 'registryPassword',
-      message: 'registryPassword is required when registryUsername is set.',
-    });
-  }
-  if (registryPassword !== undefined && registryUsername === undefined) {
-    issues.push({
-      field: 'registryUsername',
-      message: 'registryUsername is required when registryPassword is set.',
-    });
-  }
+  // Entered once by an administrator, not per pipeline (see RunnerConfig's doc comment).
+  issues.push(
+    ...validateCredentialPair(runner.registryUsername, runner.registryPassword, 'registryUsername', 'registryPassword'),
+  );
 
   const extraDockerArgs = runner.extraDockerArgs;
   if (extraDockerArgs !== undefined) {
@@ -257,13 +298,11 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
 
   const issues: ValidationIssue[] = [];
 
-  const dbRepository = config.dbRepository;
-  if (typeof dbRepository !== 'string' || dbRepository.trim().length === 0) {
-    issues.push({
-      field: 'dbRepository',
-      message: 'A vulnerability database repository is required: build agents have no internet access.',
-    });
-  }
+  // dbRepository (and javaDbRepository, dbRegistryUsername/Password below) are deprecated:
+  // see DefaultsConfig's doc comment. A fully migrated configuration has none of them set at
+  // all, so their absence is not validated here any more; the equivalent "is a database
+  // actually configured" check now lives in validateDatabaseCatalogue (does the catalogue have
+  // any entries?) and validateRunnerDatabaseLinks (does this runner name one?).
 
   if (config.timeoutMinutes !== undefined) {
     const timeout = config.timeoutMinutes;
@@ -337,22 +376,17 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
   }
 
   // Same pairing rule as validateRunner's registryUsername/registryPassword above, for the
-  // database mirror's own credentials (DefaultsConfig's doc comment explains the collision
-  // with the scanned image's credentials that this pair is otherwise subject to).
-  const dbRegistryUsername = config.dbRegistryUsername;
-  const dbRegistryPassword = config.dbRegistryPassword;
-  if (dbRegistryUsername !== undefined && dbRegistryPassword === undefined) {
-    issues.push({
-      field: 'dbRegistryPassword',
-      message: 'dbRegistryPassword is required when dbRegistryUsername is set.',
-    });
-  }
-  if (dbRegistryPassword !== undefined && dbRegistryUsername === undefined) {
-    issues.push({
-      field: 'dbRegistryUsername',
-      message: 'dbRegistryUsername is required when dbRegistryPassword is set.',
-    });
-  }
+  // deprecated database mirror credentials (DefaultsConfig's doc comment explains both the
+  // deprecation and the collision with the scanned image's credentials this pair is
+  // otherwise subject to).
+  issues.push(
+    ...validateCredentialPair(
+      config.dbRegistryUsername,
+      config.dbRegistryPassword,
+      'dbRegistryUsername',
+      'dbRegistryPassword',
+    ),
+  );
 
   if (config.cacheDir !== undefined) {
     const cacheDir = config.cacheDir;
@@ -378,6 +412,160 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
       }
     }
   }
+
+  return issues;
+}
+
+/**
+ * Validates a single database catalogue entry. Input comes from admin-form state or a
+ * hand-editable REST document, same caveat as `validateRunner`.
+ */
+export function validateDatabase(database: unknown): ValidationIssue[] {
+  if (!isRecord(database)) {
+    return [{ field: 'database', message: 'Database must be an object.' }];
+  }
+
+  const issues: ValidationIssue[] = [];
+
+  issues.push(...validateAliasField(database.alias, 'alias'));
+  issues.push(
+    ...validateReferenceField(database.repository, 'repository', 'Repository', 'Repository is required.'),
+  );
+
+  if (database.javaRepository !== undefined) {
+    issues.push(
+      ...validateReferenceField(
+        database.javaRepository,
+        'javaRepository',
+        'javaRepository',
+        'javaRepository must be a non-empty string when set.',
+      ),
+    );
+  }
+
+  // Same pairing rule as validateRunner's registryUsername/registryPassword above.
+  issues.push(
+    ...validateCredentialPair(
+      database.registryUsername,
+      database.registryPassword,
+      'registryUsername',
+      'registryPassword',
+    ),
+  );
+
+  return issues;
+}
+
+/**
+ * Validates catalogue-wide invariants only: an array of objects with unique aliases. Unlike
+ * `validateCatalog` for runners, there is no "default database" concept to check -- a runner
+ * names one explicitly (`RunnerConfig.database`) or falls back to `DefaultsConfig`'s
+ * deprecated fields; call `validateDatabase` on each entry to catch per-entry issues (alias
+ * shape, repository reference, credential pairing, ...), which this function does not.
+ */
+export function validateDatabaseCatalogue(databases: unknown): ValidationIssue[] {
+  if (!Array.isArray(databases)) {
+    return [{ field: 'databases', message: 'The database catalogue must be a list of databases.' }];
+  }
+
+  const issues: ValidationIssue[] = [];
+  const validDatabases: Record<string, unknown>[] = [];
+
+  databases.forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      issues.push({
+        field: `databases[${index}]`,
+        message: `Database at index ${index} must be an object.`,
+      });
+      return;
+    }
+    validDatabases.push(entry);
+  });
+
+  const seen = new Set<string>();
+  const duplicatesReported = new Set<string>();
+  for (const database of validDatabases) {
+    const alias = database.alias;
+    if (typeof alias !== 'string') {
+      // A malformed alias is validateDatabase's concern, not a cross-entry one.
+      continue;
+    }
+    if (seen.has(alias)) {
+      if (!duplicatesReported.has(alias)) {
+        issues.push({ field: 'alias', message: `Duplicate database alias "${alias}".` });
+        duplicatesReported.add(alias);
+      }
+    } else {
+      seen.add(alias);
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Validates that every runner naming a `database` alias names one that actually exists in the
+ * catalogue. A runner with `database` omitted is not an issue here -- it falls back to
+ * `DefaultsConfig`'s deprecated fields, see `RunnerConfig.database`'s doc comment -- but a
+ * runner naming an empty string is a mistake, not an omission, and is reported. Mirrors the
+ * "runner not found" message shape used for `TaskInputs.runner` resolution
+ * (`ConfigResolver.selectRunner`): name what was requested, then list what does exist.
+ */
+export function validateRunnerDatabaseLinks(runners: unknown, databases: unknown): ValidationIssue[] {
+  if (!Array.isArray(runners)) {
+    return [{ field: 'runners', message: 'The runner catalog must be a list of runners.' }];
+  }
+  if (!Array.isArray(databases)) {
+    return [{ field: 'databases', message: 'The database catalogue must be a list of databases.' }];
+  }
+
+  const knownAliases: string[] = [];
+  const knownAliasSet = new Set<string>();
+  databases.forEach((entry) => {
+    if (isRecord(entry) && typeof entry.alias === 'string' && !knownAliasSet.has(entry.alias)) {
+      knownAliasSet.add(entry.alias);
+      knownAliases.push(entry.alias);
+    }
+  });
+
+  const issues: ValidationIssue[] = [];
+
+  runners.forEach((entry, index) => {
+    if (!isRecord(entry)) {
+      // Not this function's concern: validateCatalog/validateRunner report shape issues.
+      return;
+    }
+
+    const database = entry.database;
+    if (database === undefined) {
+      // Falls back to DefaultsConfig's deprecated fields; see RunnerConfig.database's doc comment.
+      return;
+    }
+
+    if (database === '') {
+      issues.push({
+        field: `runners[${index}].database`,
+        message:
+          `runners[${index}].database is an empty string, which is not a valid alias. ` +
+          'Omit the field to fall back to the deprecated defaults fields instead, or name a database alias.',
+      });
+      return;
+    }
+
+    if (typeof database !== 'string' || !knownAliasSet.has(database)) {
+      if (knownAliases.length === 0) {
+        issues.push({
+          field: `runners[${index}].database`,
+          message: `Database "${String(database)}" does not exist, and no databases are currently configured.`,
+        });
+      } else {
+        issues.push({
+          field: `runners[${index}].database`,
+          message: `Database "${String(database)}" does not exist. Known databases: ${knownAliases.join(', ')}.`,
+        });
+      }
+    }
+  });
 
   return issues;
 }

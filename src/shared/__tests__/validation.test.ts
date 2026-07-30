@@ -1,5 +1,12 @@
-import { validateRunner, validateCatalog, validateDefaults } from '../validation';
-import { DefaultsConfig, RunnerConfig, Scanner, Severity } from '../types';
+import {
+  validateRunner,
+  validateCatalog,
+  validateDefaults,
+  validateDatabase,
+  validateDatabaseCatalogue,
+  validateRunnerDatabaseLinks,
+} from '../validation';
+import { DatabaseConfig, DefaultsConfig, RunnerConfig, Scanner, Severity } from '../types';
 
 const runner = (over: Partial<RunnerConfig> = {}): RunnerConfig => ({
   alias: 'baseline',
@@ -11,6 +18,12 @@ const runner = (over: Partial<RunnerConfig> = {}): RunnerConfig => ({
 
 const defaults = (over: Partial<DefaultsConfig> = {}): DefaultsConfig => ({
   dbRepository: 'registry.example.com/trivy-db:2',
+  ...over,
+});
+
+const database = (over: Partial<DatabaseConfig> = {}): DatabaseConfig => ({
+  alias: 'baseline-db',
+  repository: 'registry.example.com/trivy-db:2',
   ...over,
 });
 
@@ -250,11 +263,17 @@ describe('validateDefaults', () => {
     expect(validateDefaults(defaults())).toEqual([]);
   });
 
-  it('requires a db repository because the target environment has no internet', () => {
-    const issues = validateDefaults(defaults({ dbRepository: '  ' }));
-    expect(issues).toEqual([
-      { field: 'dbRepository', message: expect.stringContaining('required') },
-    ]);
+  // dbRepository is deprecated (see DefaultsConfig's doc comment): a fully migrated
+  // configuration has no database settings in `defaults` at all, so its absence -- or any
+  // other value -- is no longer validated here. The equivalent "is a database actually
+  // configured" check has moved to validateDatabaseCatalogue and validateRunnerDatabaseLinks.
+
+  it('accepts defaults with dbRepository omitted entirely, since it is now optional', () => {
+    expect(validateDefaults({})).toEqual([]);
+  });
+
+  it('accepts a blank dbRepository instead of requiring it, now that the field is deprecated', () => {
+    expect(validateDefaults(defaults({ dbRepository: '  ' }))).toEqual([]);
   });
 
   it('rejects a non-positive timeout', () => {
@@ -277,9 +296,8 @@ describe('validateDefaults', () => {
     expect(validateDefaults(null)).toEqual([{ field: 'defaults', message: expect.stringContaining('object') }]);
   });
 
-  it('rejects a non-string dbRepository instead of crashing on .trim', () => {
-    const issues = validateDefaults(defaults({ dbRepository: 5 as unknown as string }));
-    expect(issues).toEqual([{ field: 'dbRepository', message: expect.stringContaining('required') }]);
+  it('accepts a non-string dbRepository instead of crashing, since the field is no longer validated', () => {
+    expect(validateDefaults(defaults({ dbRepository: 5 as unknown as string }))).toEqual([]);
   });
 
   it('rejects severities: null instead of crashing on .length', () => {
@@ -466,5 +484,170 @@ describe('validateDefaults', () => {
     expect(issues).toEqual([
       { field: 'dbRegistryUsername', message: expect.stringContaining('dbRegistryUsername') },
     ]);
+  });
+});
+
+describe('validateDatabase', () => {
+  it('accepts a well-formed database', () => {
+    expect(validateDatabase(database())).toEqual([]);
+  });
+
+  it('rejects an alias that is not lowercase kebab', () => {
+    const issues = validateDatabase(database({ alias: 'Bad Alias' }));
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
+  });
+
+  it('requires a repository', () => {
+    const issues = validateDatabase(database({ repository: '' }));
+    expect(issues).toEqual([{ field: 'repository', message: expect.stringContaining('required') }]);
+  });
+
+  it('rejects the latest tag on the repository because it is not reproducible', () => {
+    const issues = validateDatabase(database({ repository: 'registry.example.com/trivy-db:latest' }));
+    expect(issues).toEqual([{ field: 'repository', message: expect.stringContaining('latest') }]);
+  });
+
+  it('accepts a digest reference on the repository', () => {
+    expect(
+      validateDatabase(database({ repository: `registry.example.com/trivy-db@sha256:${'a'.repeat(64)}` })),
+    ).toEqual([]);
+  });
+
+  it('accepts javaRepository omitted, since it is optional', () => {
+    expect(validateDatabase(database())).toEqual([]);
+  });
+
+  it('rejects a javaRepository with a bad reference, under the same rule as repository', () => {
+    const issues = validateDatabase(database({ javaRepository: 'registry.example.com/trivy-java-db:latest' }));
+    expect(issues).toEqual([{ field: 'javaRepository', message: expect.stringContaining('latest') }]);
+  });
+
+  it('accepts a well-formed javaRepository', () => {
+    expect(
+      validateDatabase(database({ javaRepository: 'registry.example.com/trivy-java-db:1' })),
+    ).toEqual([]);
+  });
+
+  // --- registry credentials: administrator-entered pair, neither half may stand alone ---
+
+  it('accepts a database with neither registry credential set', () => {
+    expect(validateDatabase(database())).toEqual([]);
+  });
+
+  it('accepts a database with both registry credentials set', () => {
+    expect(
+      validateDatabase(database({ registryUsername: 'svc', registryPassword: 'p@ss' })),
+    ).toEqual([]);
+  });
+
+  it('rejects a registryUsername without a registryPassword, naming the missing field', () => {
+    const issues = validateDatabase(database({ registryUsername: 'svc' }));
+    expect(issues).toEqual([
+      { field: 'registryPassword', message: expect.stringContaining('registryPassword') },
+    ]);
+  });
+
+  it('rejects a registryPassword without a registryUsername, naming the missing field', () => {
+    const issues = validateDatabase(database({ registryPassword: 'p@ss' }));
+    expect(issues).toEqual([
+      { field: 'registryUsername', message: expect.stringContaining('registryUsername') },
+    ]);
+  });
+
+  it('rejects a non-object database instead of throwing', () => {
+    expect(validateDatabase(null)).toEqual([{ field: 'database', message: expect.stringContaining('object') }]);
+  });
+});
+
+describe('validateDatabaseCatalogue', () => {
+  it('accepts a catalogue with unique aliases', () => {
+    expect(validateDatabaseCatalogue([database(), database({ alias: 'hardened-db' })])).toEqual([]);
+  });
+
+  it('accepts an empty catalogue: there is no "default database" to require', () => {
+    expect(validateDatabaseCatalogue([])).toEqual([]);
+  });
+
+  it('rejects duplicate aliases naming the duplicate', () => {
+    const issues = validateDatabaseCatalogue([database(), database()]);
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('baseline-db') }]);
+  });
+
+  it('rejects a non-array catalogue instead of throwing', () => {
+    expect(validateDatabaseCatalogue(null)).toEqual([
+      { field: 'databases', message: expect.stringContaining('list of databases') },
+    ]);
+    expect(validateDatabaseCatalogue({})).toEqual([
+      { field: 'databases', message: expect.stringContaining('list of databases') },
+    ]);
+  });
+
+  it('rejects a non-object catalogue entry, naming its index, instead of dereferencing it', () => {
+    const issues = validateDatabaseCatalogue([null, database()]);
+    expect(issues).toEqual([{ field: 'databases[0]', message: expect.stringContaining('index 0') }]);
+  });
+
+  it('does not validate individual database fields, only cross-entry invariants', () => {
+    expect(validateDatabaseCatalogue([{ alias: 'BAD', repository: 'x:latest' }])).toEqual([]);
+  });
+});
+
+describe('validateRunnerDatabaseLinks', () => {
+  const databases: DatabaseConfig[] = [database(), database({ alias: 'hardened-db' })];
+
+  it('produces nothing for a runner with no database set, since it falls back to defaults', () => {
+    expect(validateRunnerDatabaseLinks([runner()], databases)).toEqual([]);
+  });
+
+  it('produces nothing when a runner names a database alias that exists in the catalogue', () => {
+    expect(validateRunnerDatabaseLinks([runner({ database: 'hardened-db' })], databases)).toEqual([]);
+  });
+
+  it('rejects a runner pointing at an unknown alias, listing the known ones', () => {
+    const issues = validateRunnerDatabaseLinks([runner({ database: 'missing-db' })], databases);
+    expect(issues).toEqual([
+      {
+        field: 'runners[0].database',
+        message: expect.stringContaining('missing-db'),
+      },
+    ]);
+    expect(issues[0].message).toContain('baseline-db');
+    expect(issues[0].message).toContain('hardened-db');
+  });
+
+  it('reports no known databases distinctly when the catalogue is empty', () => {
+    const issues = validateRunnerDatabaseLinks([runner({ database: 'missing-db' })], []);
+    expect(issues).toEqual([
+      {
+        field: 'runners[0].database',
+        message: expect.stringContaining('no databases are currently configured'),
+      },
+    ]);
+  });
+
+  it('rejects a runner naming an empty-string database, since that is a mistake rather than an omission', () => {
+    const issues = validateRunnerDatabaseLinks([runner({ database: '' })], databases);
+    expect(issues).toEqual([
+      {
+        field: 'runners[0].database',
+        message: expect.stringContaining('empty string'),
+      },
+    ]);
+  });
+
+  it('rejects a non-array runners argument instead of throwing', () => {
+    expect(validateRunnerDatabaseLinks(null, databases)).toEqual([
+      { field: 'runners', message: expect.stringContaining('list of runners') },
+    ]);
+  });
+
+  it('rejects a non-array databases argument instead of throwing', () => {
+    expect(validateRunnerDatabaseLinks([runner()], null)).toEqual([
+      { field: 'databases', message: expect.stringContaining('list of databases') },
+    ]);
+  });
+
+  it('skips a non-object runner entry instead of throwing, leaving shape issues to validateCatalog', () => {
+    expect(validateRunnerDatabaseLinks([null], databases)).toEqual([]);
   });
 });

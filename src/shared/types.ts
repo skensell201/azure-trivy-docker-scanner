@@ -57,18 +57,70 @@ export interface RunnerConfig {
   isDefault?: boolean;
   /** Omitted means enabled. */
   enabled?: boolean;
+  /**
+   * The alias of this runner's entry in the database catalogue (`DatabaseConfig[]`), so a
+   * runner backed by a custom trivy image can bring its own vulnerability database instead of
+   * assuming the collection-wide one. Optional only for compatibility with a settings document
+   * written before the catalogue existed, not because leaving it unset is good configuration:
+   * a runner with no `database` falls back to the deprecated `dbRepository`/`javaDbRepository`/
+   * `dbRegistryUsername`/`dbRegistryPassword` fields on `DefaultsConfig`, and the task warns
+   * when it does so. New configurations should always set this explicitly.
+   */
+  database?: string;
+}
+
+/**
+ * A single entry in the database catalogue: a named, reusable vulnerability database that one
+ * or more runners can point at by alias (`RunnerConfig.database`). The catalogue itself is
+ * stored as its own settings document, alongside `runners` and `defaults` -- a database is a
+ * property of the runner that uses it, not a collection-wide setting, since a runner backed by
+ * a custom trivy image may ship with, and expect, its own database rather than the official
+ * one. There is no "default database": a runner names one explicitly, or falls back to
+ * `DefaultsConfig`'s deprecated fields (see `RunnerConfig.database`'s doc comment).
+ */
+export interface DatabaseConfig {
+  alias: string;
+  repository: string;
+  javaRepository?: string;
+  /**
+   * Same plain-text-storage caveat as `RunnerConfig.registryUsername`/`registryPassword`:
+   * entered once by an administrator, not supplied per pipeline. Both fields are optional
+   * together, but `validateDatabase` rejects one being set without the other.
+   */
+  registryUsername?: string;
+  registryPassword?: string;
+  displayName?: string;
+  description?: string;
 }
 
 export interface DefaultsConfig {
-  dbRepository: string;
+  /**
+   * @deprecated Pre-catalogue arrangement, from before a database was a per-runner
+   * concept (see `DatabaseConfig`/`RunnerConfig.database`). Still honoured as the
+   * fallback for a runner with no `database` set, so it is not removed, but it is no
+   * longer where a new configuration should record its database: that belongs in the
+   * catalogue, linked to a runner by alias. Will be removed once configurations have
+   * moved. Was formerly the one required field of `DefaultsConfig` -- a fully migrated
+   * configuration has no database settings in `defaults` at all, so it is optional now;
+   * the equivalent "is a database actually configured" check has moved to the catalogue
+   * (`validateDatabaseCatalogue`) and the runner-to-database link
+   * (`validateRunnerDatabaseLinks`), not disappeared.
+   */
+  dbRepository?: string;
+  /** @deprecated Same pre-catalogue arrangement as `dbRepository` above; see its doc comment. */
   javaDbRepository?: string;
   /**
    * Same plain-text-storage caveat as `RunnerConfig.registryUsername`/`registryPassword`
    * above. Trivy reads these from `TRIVY_USERNAME`/`TRIVY_PASSWORD` inside the container,
    * which the scanned image's own credentials (`TaskInputs.targetRegistryConnection`) also
    * use - see `run.ts`'s credential resolution for how that collision is handled.
+   *
+   * @deprecated Same pre-catalogue arrangement as `dbRepository` above; see its doc
+   * comment. A cataloged `DatabaseConfig` carries its own `registryUsername`/
+   * `registryPassword` instead.
    */
   dbRegistryUsername?: string;
+  /** @deprecated Same pre-catalogue arrangement as `dbRepository` above; see its doc comment. */
   dbRegistryPassword?: string;
   cacheDir?: string;
   skipDbUpdate?: boolean;
