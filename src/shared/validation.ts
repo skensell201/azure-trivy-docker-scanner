@@ -1,4 +1,3 @@
-import * as path from 'path';
 import { splitArgs } from './args';
 import { isSeverity, SEVERITY_ORDER } from './severity';
 import { OverridableField, Scanner } from './types';
@@ -25,6 +24,33 @@ const TAG_PATTERN = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,127}$/;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Minimal stand-in for `path.posix.normalize` (resolves `.`/`..` segments and collapses
+ * repeated slashes), kept dependency-free rather than importing Node's `path` module: this
+ * file is shared between the Node-side task and the browser-side hub bundle, and webpack 5
+ * no longer polyfills Node core modules automatically, so `import 'path'` here would break
+ * `npm run build:hub` the moment any hub component imports validateDefaults.
+ */
+function normalizePosixPath(input: string): string {
+  const absolute = input.startsWith('/');
+  const resolved: string[] = [];
+  for (const segment of input.split('/')) {
+    if (segment === '' || segment === '.') {
+      continue;
+    }
+    if (segment === '..') {
+      if (resolved.length > 0 && resolved[resolved.length - 1] !== '..') {
+        resolved.pop();
+      } else if (!absolute) {
+        resolved.push('..');
+      }
+      continue;
+    }
+    resolved.push(segment);
+  }
+  return (absolute ? '/' : '') + resolved.join('/');
 }
 
 /**
@@ -343,7 +369,7 @@ export function validateDefaults(config: unknown): ValidationIssue[] {
       // (0 segments) or a single top-level directory such as /etc or /var
       // (1 segment) - either would mount a directory no scan container
       // should be able to write into.
-      const segments = path.posix.normalize(cacheDir).split('/').filter((segment) => segment.length > 0);
+      const segments = normalizePosixPath(cacheDir).split('/').filter((segment) => segment.length > 0);
       if (segments.length < 2) {
         issues.push({
           field: 'cacheDir',

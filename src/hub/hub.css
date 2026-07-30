@@ -1,0 +1,40 @@
+/* Minimal styling to feel at home in Azure DevOps. This is dressing, not a design system. */
+
+body {
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  font-size: 13px;
+  color: #171717;
+  margin: 16px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid #e1e1e1;
+}
+
+label {
+  display: block;
+  max-width: 420px;
+  margin-bottom: 10px;
+}
+
+label input {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+
+.trivy-issues {
+  color: #a80000;
+}
+
+.trivy-warning {
+  color: #616161;
+}

@@ -2,26 +2,37 @@
   "manifestVersion": 1,
   "id": "trivy-docker-scanner",
   "publisher": "iksoftware",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "name": "Trivy Docker Scanner",
-  "description": "Run Trivy from a curated catalog of docker runner images and gate builds on the findings. Centrally managed defaults are configured via the Extension Data REST API in this version.",
+  "description": "Run Trivy from a curated catalog of docker runner images and gate builds on the findings. Centrally managed defaults are configured through an admin hub in Collection Settings.",
   "public": false,
   "content": { "details": { "path": "overview.md" } },
   "categories": ["Azure Pipelines"],
   "tags": ["trivy", "security", "containers", "vulnerability", "sbom"],
   "targets": [{ "id": "Microsoft.TeamFoundation.Server", "version": "[17.0,)" }],
   "icons": { "default": "images/icon.png" },
-  "scopes": ["vso.extension.data"],
+  "scopes": ["vso.extension.data_write"],
   "contributions": [
     {
       "id": "trivy-scan-task",
       "type": "ms.vss-distributed-task.task",
       "targets": ["ms.vss-distributed-task.tasks"],
       "properties": { "name": "TrivyScan" }
+    },
+    {
+      "id": "trivy-admin-hub",
+      "type": "ms.vss-web.hub",
+      "targets": ["ms.vss-web.collection-admin-hub-group"],
+      "properties": {
+        "name": "Trivy Scanner",
+        "order": 30,
+        "uri": "dist/hub.html"
+      }
     }
   ],
   "files": [
     { "path": "TrivyScan" },
-    { "path": "images", "addressable": true }
+    { "path": "images", "addressable": true },
+    { "path": "dist", "addressable": true }
   ]
 }

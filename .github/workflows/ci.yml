@@ -23,6 +23,7 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build:task
+      - run: npm run build:hub
       - name: Smoke-test the assembled task's module resolution
         # Not a functional test: the entry point exits non-zero here because there is no
         # Azure Pipelines agent context (no System.CollectionUri, etc). The one failure mode
