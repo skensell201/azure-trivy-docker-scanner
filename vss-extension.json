@@ -2,7 +2,7 @@
   "manifestVersion": 1,
   "id": "trivy-docker-scanner",
   "publisher": "iksoftware",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "name": "Trivy Docker Scanner",
   "description": "Run Trivy from a curated catalog of docker runner images and gate builds on the findings. Centrally managed defaults are configured via the Extension Data REST API in this version.",
   "public": false,

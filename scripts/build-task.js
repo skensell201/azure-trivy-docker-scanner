@@ -32,6 +32,11 @@ for (const executionHandler of Object.values(taskJson.execution)) {
 }
 fs.writeFileSync(path.join(out, 'task.json'), JSON.stringify(taskJson, null, 2) + '\n');
 
+// A pipeline task carries its own icon: the task picker looks for a 32x32 icon.png next to
+// task.json inside the task folder. images/icon.png is the extension's icon and is only used
+// in the installed-extensions list, so without this copy the task shows a generic placeholder.
+fs.copyFileSync(path.join(root, 'src', 'task', 'icon.png'), path.join(out, 'icon.png'));
+
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 fs.writeFileSync(
   path.join(out, 'package.json'),

@@ -6,14 +6,33 @@
   "author": "iksoftware",
   "helpMarkDown": "See the project README for configuration.",
   "category": "Utility",
-  "visibility": ["Build", "Release"],
+  "visibility": [
+    "Build",
+    "Release"
+  ],
   "demands": [],
-  "version": { "Major": 1, "Minor": 0, "Patch": 0 },
+  "version": {
+    "Major": 1,
+    "Minor": 0,
+    "Patch": 1
+  },
   "instanceNameFormat": "Trivy scan $(target)",
   "groups": [
-    { "name": "policy", "displayName": "Severity and gate", "isExpanded": true },
-    { "name": "output", "displayName": "Output", "isExpanded": false },
-    { "name": "advanced", "displayName": "Advanced", "isExpanded": false }
+    {
+      "name": "policy",
+      "displayName": "Severity and gate",
+      "isExpanded": true
+    },
+    {
+      "name": "output",
+      "displayName": "Output",
+      "isExpanded": false
+    },
+    {
+      "name": "advanced",
+      "displayName": "Advanced",
+      "isExpanded": false
+    }
   ],
   "inputs": [
     {
@@ -44,10 +63,34 @@
       "required": false,
       "helpMarkDown": "Alias from Collection Settings > Trivy Scanner. Leave empty to use the default runner."
     },
-    { "name": "severities", "type": "string", "label": "Severities", "required": false, "groupName": "policy" },
-    { "name": "scanners", "type": "string", "label": "Scanners", "required": false, "groupName": "policy" },
-    { "name": "failOn", "type": "string", "label": "Fail on severity", "required": false, "groupName": "policy" },
-    { "name": "ignoreUnfixed", "type": "boolean", "label": "Ignore unfixed", "required": false, "groupName": "policy" },
+    {
+      "name": "severities",
+      "type": "string",
+      "label": "Severities",
+      "required": false,
+      "groupName": "policy"
+    },
+    {
+      "name": "scanners",
+      "type": "string",
+      "label": "Scanners",
+      "required": false,
+      "groupName": "policy"
+    },
+    {
+      "name": "failOn",
+      "type": "string",
+      "label": "Fail on severity",
+      "required": false,
+      "groupName": "policy"
+    },
+    {
+      "name": "ignoreUnfixed",
+      "type": "boolean",
+      "label": "Ignore unfixed",
+      "required": false,
+      "groupName": "policy"
+    },
     {
       "name": "ignoreFile",
       "type": "string",
@@ -56,22 +99,75 @@
       "groupName": "policy",
       "helpMarkDown": "Path to a .trivyignore file, relative to the sources directory (not an absolute path). Example: `.trivyignore` or `config/.trivyignore`."
     },
-    { "name": "formats", "type": "string", "label": "Output formats", "required": false, "groupName": "output" },
+    {
+      "name": "formats",
+      "type": "string",
+      "label": "Output formats",
+      "required": false,
+      "groupName": "output"
+    },
     {
       "name": "generateSbom",
       "type": "pickList",
       "label": "Generate SBOM",
       "required": false,
       "groupName": "output",
-      "options": { "off": "Off", "cyclonedx": "CycloneDX", "spdx-json": "SPDX JSON" }
+      "options": {
+        "off": "Off",
+        "cyclonedx": "CycloneDX",
+        "spdx-json": "SPDX JSON"
+      }
     },
-    { "name": "publishArtifact", "type": "boolean", "label": "Publish report artifact", "required": false, "groupName": "output" },
-    { "name": "targetRegistryConnection", "type": "connectedService:dockerregistry", "label": "Registry connection for the scanned image", "required": false, "groupName": "advanced" },
-    { "name": "configConnection", "type": "connectedService:Generic", "label": "Settings connection (PAT)", "required": false, "groupName": "advanced", "helpMarkDown": "Only needed when the job cannot read extension settings with its OAuth token." },
-    { "name": "useDockerSocket", "type": "boolean", "label": "Mount the docker socket", "required": false, "groupName": "advanced" },
-    { "name": "skipDbUpdate", "type": "boolean", "label": "Skip database update", "required": false, "groupName": "advanced" },
-    { "name": "timeoutMinutes", "type": "string", "label": "Timeout in minutes", "required": false, "groupName": "advanced" },
-    { "name": "extraTrivyArgs", "type": "string", "label": "Extra trivy arguments", "required": false, "groupName": "advanced" },
+    {
+      "name": "publishArtifact",
+      "type": "boolean",
+      "label": "Publish report artifact",
+      "required": false,
+      "groupName": "output"
+    },
+    {
+      "name": "targetRegistryConnection",
+      "type": "connectedService:dockerregistry",
+      "label": "Registry connection for the scanned image",
+      "required": false,
+      "groupName": "advanced"
+    },
+    {
+      "name": "configConnection",
+      "type": "connectedService:Generic",
+      "label": "Settings connection (PAT)",
+      "required": false,
+      "groupName": "advanced",
+      "helpMarkDown": "Only needed when the job cannot read extension settings with its OAuth token."
+    },
+    {
+      "name": "useDockerSocket",
+      "type": "boolean",
+      "label": "Mount the docker socket",
+      "required": false,
+      "groupName": "advanced"
+    },
+    {
+      "name": "skipDbUpdate",
+      "type": "boolean",
+      "label": "Skip database update",
+      "required": false,
+      "groupName": "advanced"
+    },
+    {
+      "name": "timeoutMinutes",
+      "type": "string",
+      "label": "Timeout in minutes",
+      "required": false,
+      "groupName": "advanced"
+    },
+    {
+      "name": "extraTrivyArgs",
+      "type": "string",
+      "label": "Extra trivy arguments",
+      "required": false,
+      "groupName": "advanced"
+    },
     {
       "name": "workingDirectory",
       "type": "string",
@@ -82,7 +178,11 @@
     }
   ],
   "execution": {
-    "Node16": { "target": "index.js" },
-    "Node20_1": { "target": "index.js" }
+    "Node16": {
+      "target": "index.js"
+    },
+    "Node20_1": {
+      "target": "index.js"
+    }
   }
 }
