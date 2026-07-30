@@ -3,18 +3,21 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { App } from '../App';
 import { SettingsConflictError } from '../settingsStore';
-import { DefaultsConfig, RunnerConfig } from '../../shared/types';
+import { DatabaseConfig, DefaultsConfig, RunnerConfig } from '../../shared/types';
 
 class FakeStore {
   runners: RunnerConfig[] = [
     { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
   ];
   defaults: DefaultsConfig = { dbRepository: 'registry.example.com/trivy-db:2' };
+  databases: DatabaseConfig[] = [];
   savedRunners: RunnerConfig[][] = [];
+  savedDatabases: DatabaseConfig[][] = [];
   failNextSave: Error | undefined;
 
   loadRunners = jest.fn(async () => this.runners);
   loadDefaults = jest.fn(async () => this.defaults);
+  loadDatabases = jest.fn(async () => this.databases);
   saveRunners = jest.fn(async (runners: RunnerConfig[]) => {
     if (this.failNextSave) {
       const error = this.failNextSave;
@@ -24,6 +27,14 @@ class FakeStore {
     this.savedRunners.push(runners);
   });
   saveDefaults = jest.fn(async () => undefined);
+  saveDatabases = jest.fn(async (databases: DatabaseConfig[]) => {
+    if (this.failNextSave) {
+      const error = this.failNextSave;
+      this.failNextSave = undefined;
+      throw error;
+    }
+    this.savedDatabases.push(databases);
+  });
 }
 
 describe('App', () => {
@@ -32,10 +43,11 @@ describe('App', () => {
     expect(await screen.findByText('baseline')).toBeTruthy();
   });
 
-  it('offers the three tabs', async () => {
+  it('offers the four tabs', async () => {
     render(<App store={new FakeStore()} />);
     await screen.findByText('baseline');
     expect(screen.getByRole('tab', { name: /runners/i })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: /databases/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /defaults/i })).toBeTruthy();
     expect(screen.getByRole('tab', { name: /policy/i })).toBeTruthy();
   });
@@ -44,7 +56,16 @@ describe('App', () => {
     render(<App store={new FakeStore()} />);
     await screen.findByText('baseline');
     await userEvent.click(screen.getByRole('tab', { name: /defaults/i }));
-    expect(screen.getByLabelText(/database repository/i)).toBeTruthy();
+    expect(screen.getByLabelText(/cache directory/i)).toBeTruthy();
+  });
+
+  it('switches to the databases tab', async () => {
+    const store = new FakeStore();
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /databases/i }));
+    expect(await screen.findByText('official')).toBeTruthy();
   });
 
   it('adds a runner and saves the whole catalog', async () => {
@@ -138,5 +159,138 @@ describe('App', () => {
     expect(await screen.findByText(/saved/i)).toBeTruthy();
     expect(screen.queryByText(/exactly one/i)).toBeNull();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  // --- Databases tab ---
+
+  it('adds a database and saves the whole catalogue', async () => {
+    const store = new FakeStore();
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /databases/i }));
+    await screen.findByText('official');
+    await userEvent.click(screen.getByRole('button', { name: /add database/i }));
+    await userEvent.type(screen.getByLabelText('Alias'), 'hardened-db');
+    await userEvent.type(screen.getByLabelText(/^repository$/i), 'registry.example.com/trivy-db-fips:2');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(store.saveDatabases).toHaveBeenCalled());
+    expect(store.savedDatabases[0].map((database) => database.alias)).toEqual(['official', 'hardened-db']);
+  });
+
+  it('never renders a stored database password, and a save that did not touch it keeps it', async () => {
+    const store = new FakeStore();
+    store.databases = [
+      {
+        alias: 'official',
+        repository: 'registry.example.com/trivy-db:2',
+        registryUsername: 'svc',
+        registryPassword: 'stored-secret',
+      },
+    ];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /databases/i }));
+    await screen.findByText('official');
+    expect(document.body.innerHTML).not.toContain('stored-secret');
+
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }));
+    expect(document.body.innerHTML).not.toContain('stored-secret');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(store.saveDatabases).toHaveBeenCalled());
+    expect(store.savedDatabases[0][0]).toMatchObject({ registryPassword: 'stored-secret' });
+  });
+
+  it('refuses to delete a database a runner still points at, naming the runner', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      {
+        alias: 'baseline',
+        image: 'registry.example.com/trivy:0.58.1',
+        isDefault: true,
+        enabled: true,
+        database: 'official',
+      },
+    ];
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /databases/i }));
+    await screen.findByText('official');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /delete/i }));
+    });
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByRole('alert').textContent).toMatch(/baseline/);
+    expect(store.saveDatabases).not.toHaveBeenCalled();
+  });
+
+  it('lets a database with no runner pointing at it be deleted', async () => {
+    const store = new FakeStore();
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /databases/i }));
+    await screen.findByText('official');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /delete/i }));
+    });
+    await waitFor(() => expect(store.saveDatabases).toHaveBeenCalledWith([]));
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('refuses to save a runner naming a database that no longer exists, since the two documents can disagree', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      {
+        alias: 'baseline',
+        image: 'registry.example.com/trivy:0.58.1',
+        isDefault: true,
+        enabled: true,
+        database: 'missing-db',
+      },
+    ];
+    store.databases = [];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('button', { name: /edit/i }));
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByRole('alert').textContent).toMatch(/missing-db/);
+    expect(screen.getByRole('alert').textContent).toMatch(/baseline/);
+    expect(store.saveRunners).not.toHaveBeenCalled();
+  });
+
+  it('offers the database catalogue and the not-linked option when adding a runner', async () => {
+    const store = new FakeStore();
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('button', { name: /add runner/i }));
+    const select = screen.getByLabelText('Database') as HTMLSelectElement;
+    const values = Array.from(select.options).map((option) => option.value);
+    expect(values).toEqual(['', 'official']);
+  });
+
+  it('saves the database selected on the runner form', async () => {
+    const store = new FakeStore();
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('button', { name: /add runner/i }));
+    await userEvent.type(screen.getByLabelText(/alias/i), 'hardened');
+    await userEvent.type(screen.getByLabelText(/image/i), 'registry.example.com/trivy-fips:0.58.1');
+    await userEvent.selectOptions(screen.getByLabelText('Database'), 'official');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(store.saveRunners).toHaveBeenCalled());
+    expect(store.savedRunners[0][1]).toMatchObject({ database: 'official' });
   });
 });

@@ -1,4 +1,4 @@
-import { DefaultsConfig, RunnerConfig } from '../shared/types';
+import { DatabaseConfig, DefaultsConfig, RunnerConfig } from '../shared/types';
 
 /** The slice of the Extension Data Service this hub needs. Narrow on purpose: it is what the tests fake. */
 export interface DocumentManager {
@@ -11,6 +11,7 @@ export class SettingsConflictError extends Error {}
 const COLLECTION = '$settings';
 const RUNNERS = 'runners';
 const DEFAULTS = 'defaults';
+const DATABASES = 'databases';
 
 interface StoredDocument<T> {
   id: string;
@@ -42,6 +43,20 @@ export class SettingsStore {
 
   async saveDefaults(defaults: DefaultsConfig): Promise<void> {
     await this.save(DEFAULTS, defaults);
+  }
+
+  /**
+   * A missing `databases` document is an empty catalogue, same reasoning as `loadRunners`: an
+   * administrator who has not yet created any custom database entries should see an empty list,
+   * not an error, and every runner simply keeps falling back to `DefaultsConfig`'s deprecated
+   * fields (see `RunnerConfig.database`'s doc comment).
+   */
+  async loadDatabases(): Promise<DatabaseConfig[]> {
+    return (await this.load<DatabaseConfig[]>(DATABASES)) ?? [];
+  }
+
+  async saveDatabases(databases: DatabaseConfig[]): Promise<void> {
+    await this.save(DATABASES, databases);
   }
 
   private async load<T>(id: string): Promise<T | undefined> {

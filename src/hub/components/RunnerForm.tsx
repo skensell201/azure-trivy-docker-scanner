@@ -1,22 +1,30 @@
 import * as React from 'react';
-import { RunnerConfig } from '../../shared/types';
+import { DatabaseConfig, RunnerConfig } from '../../shared/types';
 import { validateRunner, ValidationIssue } from '../../shared/validation';
 import { IssueList } from './IssueList';
+import { RegistryCredentialFields, useStoredPassword } from './RegistryCredentialFields';
 
 export interface RunnerFormProps {
   /** Undefined when adding; the existing runner when editing. */
   runner: RunnerConfig | undefined;
+  /**
+   * The full database catalogue, so the runner's database is a select populated from what
+   * actually exists rather than a free-text field an administrator could mistype. This form
+   * does not fetch it - the catalogue is App's to load, this form's only to render.
+   */
+  databases: DatabaseConfig[];
   onSave: (runner: RunnerConfig) => void;
   onCancel: () => void;
 }
 
-export function RunnerForm({ runner, onSave, onCancel }: RunnerFormProps): JSX.Element {
+export function RunnerForm({ runner, databases, onSave, onCancel }: RunnerFormProps): JSX.Element {
   const [alias, setAlias] = React.useState(runner?.alias ?? '');
   const [image, setImage] = React.useState(runner?.image ?? '');
   const [displayName, setDisplayName] = React.useState(runner?.displayName ?? '');
   const [description, setDescription] = React.useState(runner?.description ?? '');
   const [extraDockerArgs, setExtraDockerArgs] = React.useState(runner?.extraDockerArgs ?? '');
   const [registryUsername, setRegistryUsername] = React.useState(runner?.registryUsername ?? '');
+  const [database, setDatabase] = React.useState(runner?.database ?? '');
   const [isDefault, setIsDefault] = React.useState(runner?.isDefault ?? false);
   const [enabled, setEnabled] = React.useState(runner?.enabled !== false);
   const [issues, setIssues] = React.useState<ValidationIssue[]>([]);
@@ -24,9 +32,14 @@ export function RunnerForm({ runner, onSave, onCancel }: RunnerFormProps): JSX.E
   // The stored password is never rendered. It is only carried through untouched unless the
   // administrator explicitly chooses to replace it, so saving a form nobody edited cannot
   // wipe the credential out of the settings document.
-  const hasStoredPassword = Boolean(runner?.registryPassword);
-  const [replacingPassword, setReplacingPassword] = React.useState(!hasStoredPassword);
-  const [newPassword, setNewPassword] = React.useState('');
+  const {
+    hasStoredPassword,
+    replacingPassword,
+    setReplacingPassword,
+    newPassword,
+    setNewPassword,
+    resolvedPassword,
+  } = useStoredPassword(runner?.registryPassword);
 
   const build = (): RunnerConfig => {
     const next: RunnerConfig = { alias: alias.trim(), image: image.trim(), isDefault, enabled };
@@ -42,10 +55,12 @@ export function RunnerForm({ runner, onSave, onCancel }: RunnerFormProps): JSX.E
     if (registryUsername.trim()) {
       next.registryUsername = registryUsername.trim();
     }
+    if (database) {
+      next.database = database;
+    }
 
-    const password = replacingPassword ? newPassword : runner?.registryPassword;
-    if (password) {
-      next.registryPassword = password;
+    if (resolvedPassword) {
+      next.registryPassword = resolvedPassword;
     }
     return next;
   };
@@ -85,34 +100,32 @@ export function RunnerForm({ runner, onSave, onCancel }: RunnerFormProps): JSX.E
         />
       </label>
       <label>
-        Registry username
-        <input
-          value={registryUsername}
-          onChange={(event) => setRegistryUsername(event.target.value)}
-        />
+        Database
+        <select value={database} onChange={(event) => setDatabase(event.target.value)}>
+          <option value="">
+            Not linked - uses the deprecated Defaults tab settings (being phased out)
+          </option>
+          {databases.map((entry) => (
+            <option key={entry.alias} value={entry.alias}>
+              {entry.alias}
+            </option>
+          ))}
+        </select>
       </label>
 
-      {hasStoredPassword && !replacingPassword ? (
-        <div>
-          <span>A registry password is stored for this runner.</span>{' '}
-          <button type="button" onClick={() => setReplacingPassword(true)}>
-            Replace password
-          </button>
-        </div>
-      ) : (
-        <label>
-          Password
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-          />
-        </label>
-      )}
-      <p className="trivy-warning">
-        The registry password is stored in clear text in the extension settings document. Anyone
-        with read access to this collection&apos;s extension data can read it.
-      </p>
+      <RegistryCredentialFields
+        usernameLabel="Registry username"
+        username={registryUsername}
+        onUsernameChange={setRegistryUsername}
+        passwordLabel="Password"
+        storedPasswordMessage="A registry password is stored for this runner."
+        hasStoredPassword={hasStoredPassword}
+        replacingPassword={replacingPassword}
+        onReplacePassword={() => setReplacingPassword(true)}
+        newPassword={newPassword}
+        onNewPasswordChange={setNewPassword}
+        warningText="The registry password is stored in clear text in the extension settings document. Anyone with read access to this collection's extension data can read it."
+      />
 
       <label>
         Default runner

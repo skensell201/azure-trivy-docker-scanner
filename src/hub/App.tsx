@@ -1,10 +1,19 @@
 import * as React from 'react';
 import './hub.css';
-import { DefaultsConfig, RunnerConfig } from '../shared/types';
-import { validateCatalog, validateRunner, ValidationIssue } from '../shared/validation';
+import { DatabaseConfig, DefaultsConfig, RunnerConfig } from '../shared/types';
+import {
+  validateCatalog,
+  validateDatabase,
+  validateDatabaseCatalogue,
+  validateRunner,
+  validateRunnerDatabaseLinks,
+  ValidationIssue,
+} from '../shared/validation';
 import { SettingsConflictError } from './settingsStore';
 import { RunnerTable } from './components/RunnerTable';
 import { RunnerForm } from './components/RunnerForm';
+import { DatabaseTable } from './components/DatabaseTable';
+import { DatabaseForm } from './components/DatabaseForm';
 import { DefaultsForm } from './components/DefaultsForm';
 import { PolicyForm } from './components/PolicyForm';
 import { IssueList } from './components/IssueList';
@@ -12,26 +21,48 @@ import { IssueList } from './components/IssueList';
 /**
  * The slice of `SettingsStore` this shell needs. `SettingsStore` satisfies this structurally;
  * it is not implemented via an interface/class relationship, so a fake store in tests needs
- * nothing beyond these four methods.
+ * nothing beyond these six methods.
  */
 export interface SettingsGateway {
   loadRunners(): Promise<RunnerConfig[]>;
   loadDefaults(): Promise<DefaultsConfig>;
+  loadDatabases(): Promise<DatabaseConfig[]>;
   saveRunners(runners: RunnerConfig[]): Promise<void>;
   saveDefaults(defaults: DefaultsConfig): Promise<void>;
+  saveDatabases(databases: DatabaseConfig[]): Promise<void>;
 }
 
 export interface AppProps {
   store: SettingsGateway;
 }
 
-type Tab = 'runners' | 'defaults' | 'policy';
+type Tab = 'runners' | 'databases' | 'defaults' | 'policy';
+
+/**
+ * `validateRunnerDatabaseLinks` names an offending runner only by array index
+ * (`runners[N].database`), agnostic of aliases since it does not know which document layout
+ * called it. Only here, where both documents are in hand, can the message be made to actually
+ * name the runner an administrator would recognize - so this rewrites the field-indexed message
+ * into one that leads with the runner's alias, for every issue this shell surfaces.
+ */
+function nameRunnersInLinkIssues(issues: ValidationIssue[], runners: RunnerConfig[]): ValidationIssue[] {
+  return issues.map((issue) => {
+    const match = /^runners\[(\d+)\]\.database$/.exec(issue.field);
+    if (!match) {
+      return issue;
+    }
+    const alias = runners[Number(match[1])]?.alias;
+    return alias ? { ...issue, message: `Runner "${alias}": ${issue.message}` } : issue;
+  });
+}
 
 export function App({ store }: AppProps): JSX.Element {
   const [runners, setRunners] = React.useState<RunnerConfig[] | undefined>(undefined);
   const [defaults, setDefaults] = React.useState<DefaultsConfig | undefined>(undefined);
+  const [databases, setDatabases] = React.useState<DatabaseConfig[] | undefined>(undefined);
   const [tab, setTab] = React.useState<Tab>('runners');
   const [editing, setEditing] = React.useState<RunnerConfig | undefined | 'new'>(undefined);
+  const [editingDatabase, setEditingDatabase] = React.useState<DatabaseConfig | undefined | 'new'>(undefined);
   const [loadError, setLoadError] = React.useState<string | undefined>(undefined);
   const [issues, setIssues] = React.useState<ValidationIssue[]>([]);
   const [savedMessage, setSavedMessage] = React.useState<string | undefined>(undefined);
@@ -45,15 +76,17 @@ export function App({ store }: AppProps): JSX.Element {
     let cancelled = false;
     (async () => {
       try {
-        const [loadedRunners, loadedDefaults] = await Promise.all([
+        const [loadedRunners, loadedDefaults, loadedDatabases] = await Promise.all([
           store.loadRunners(),
           store.loadDefaults(),
+          store.loadDatabases(),
         ]);
         if (cancelled) {
           return;
         }
         setRunners(loadedRunners);
         setDefaults(loadedDefaults);
+        setDatabases(loadedDatabases);
       } catch (error) {
         if (cancelled) {
           return;
@@ -93,15 +126,21 @@ export function App({ store }: AppProps): JSX.Element {
   };
 
   /**
-   * Validates the whole catalog (cross-runner invariants) plus each individual runner (shape of
-   * a single entry) before writing. Either check can fail on a hand-edited document even when
-   * the form that produced this particular change was itself valid, so both must run here, not
-   * just inside RunnerForm. Used for add/edit, where the modal introduces a runner the rest of
-   * the catalog has never seen; deleting an existing, already-valid runner writes immediately
-   * (see `handleDeleteRunner`) instead of going through this gate.
+   * Validates the whole catalog (cross-runner invariants), each individual runner (shape of a
+   * single entry), and every runner's link into the database catalogue before writing. All three
+   * can fail on a hand-edited document even when the form that produced this particular change
+   * was itself valid, so all three must run here, not just inside RunnerForm - the link check
+   * especially, since only this shell holds both documents at once (see
+   * `nameRunnersInLinkIssues`'s doc comment). Used for add/edit, where the modal introduces a
+   * runner the rest of the catalog has never seen; deleting an existing, already-valid runner
+   * writes immediately (see `handleDeleteRunner`) instead of going through this gate.
    */
   const persistRunners = async (next: RunnerConfig[]): Promise<void> => {
-    const found = [...validateCatalog(next), ...next.flatMap((runner) => validateRunner(runner))];
+    const found = [
+      ...validateCatalog(next),
+      ...next.flatMap((runner) => validateRunner(runner)),
+      ...nameRunnersInLinkIssues(validateRunnerDatabaseLinks(next, databases ?? []), next),
+    ];
     if (found.length > 0) {
       setIssues(found);
       return;
@@ -152,6 +191,75 @@ export function App({ store }: AppProps): JSX.Element {
     }
   };
 
+  /** Writes a database catalogue and reflects the outcome, same shape as `writeRunners`. */
+  const writeDatabases = async (next: DatabaseConfig[]): Promise<boolean> => {
+    try {
+      await store.saveDatabases(next);
+      setDatabases(next);
+      setSavedMessage('Saved.');
+      setIssues([]);
+      return true;
+    } catch (error) {
+      if (error instanceof SettingsConflictError) {
+        setIssues([{ field: 'databases', message: error.message }]);
+        return false;
+      }
+      setIssues([{ field: 'databases', message: (error as Error).message }]);
+      return false;
+    }
+  };
+
+  /**
+   * Validates the whole catalogue, each individual database, and - since a database being
+   * renamed or removed here can orphan a runner's link just as surely as deleting it outright
+   * (see `handleDeleteDatabase`) - every runner's link into the resulting catalogue, before
+   * writing. Unlike runner deletion, there is no "write unconditionally, warn afterwards" path
+   * for databases: a runner losing its database silently would leave a scan quietly falling back
+   * to defaults nobody meant it to use, so this is always a blocking refusal.
+   */
+  const persistDatabases = async (next: DatabaseConfig[]): Promise<void> => {
+    const found = [
+      ...validateDatabaseCatalogue(next),
+      ...next.flatMap((database) => validateDatabase(database)),
+      ...nameRunnersInLinkIssues(validateRunnerDatabaseLinks(runners ?? [], next), runners ?? []),
+    ];
+    if (found.length > 0) {
+      setIssues(found);
+      return;
+    }
+    await writeDatabases(next);
+  };
+
+  const handleSaveDatabase = async (database: DatabaseConfig): Promise<void> => {
+    const current = databases ?? [];
+    const next =
+      editingDatabase !== 'new' && editingDatabase !== undefined
+        ? current.map((existing) => (existing === editingDatabase ? database : existing))
+        : [...current, database];
+    setEditingDatabase(undefined);
+    await persistDatabases(next);
+  };
+
+  /**
+   * Unlike `handleDeleteRunner`, this refuses rather than writing-then-warning: deleting a
+   * database out from under a runner that still names it would silently switch that runner onto
+   * the deprecated `DefaultsConfig` fallback (see `RunnerConfig.database`'s doc comment), which is
+   * exactly the kind of surprise `validateRunnerDatabaseLinks` exists to prevent - so the write
+   * never happens while any runner still points here.
+   */
+  const handleDeleteDatabase = async (database: DatabaseConfig): Promise<void> => {
+    const next = (databases ?? []).filter((existing) => existing !== database);
+    const linkIssues = nameRunnersInLinkIssues(
+      validateRunnerDatabaseLinks(runners ?? [], next),
+      runners ?? [],
+    );
+    if (linkIssues.length > 0) {
+      setIssues(linkIssues);
+      return;
+    }
+    await writeDatabases(next);
+  };
+
   if (loadError !== undefined) {
     return (
       <div role="alert">
@@ -160,7 +268,7 @@ export function App({ store }: AppProps): JSX.Element {
     );
   }
 
-  if (runners === undefined || defaults === undefined) {
+  if (runners === undefined || defaults === undefined || databases === undefined) {
     return <p role="status">Loading…</p>;
   }
 
@@ -169,6 +277,9 @@ export function App({ store }: AppProps): JSX.Element {
       <div role="tablist">
         <button role="tab" aria-selected={tab === 'runners'} onClick={() => setTab('runners')}>
           Runners
+        </button>
+        <button role="tab" aria-selected={tab === 'databases'} onClick={() => setTab('databases')}>
+          Databases
         </button>
         <button role="tab" aria-selected={tab === 'defaults'} onClick={() => setTab('defaults')}>
           Defaults
@@ -194,6 +305,7 @@ export function App({ store }: AppProps): JSX.Element {
         editing !== undefined ? (
           <RunnerForm
             runner={editing === 'new' ? undefined : editing}
+            databases={databases}
             onSave={(runner) => {
               void handleSaveRunner(runner);
             }}
@@ -209,6 +321,31 @@ export function App({ store }: AppProps): JSX.Element {
               onEdit={(runner) => setEditing(runner)}
               onDelete={(runner) => {
                 void handleDeleteRunner(runner);
+              }}
+            />
+          </>
+        )
+      ) : null}
+
+      {tab === 'databases' ? (
+        editingDatabase !== undefined ? (
+          <DatabaseForm
+            database={editingDatabase === 'new' ? undefined : editingDatabase}
+            onSave={(database) => {
+              void handleSaveDatabase(database);
+            }}
+            onCancel={() => setEditingDatabase(undefined)}
+          />
+        ) : (
+          <>
+            <button type="button" onClick={() => setEditingDatabase('new')}>
+              Add database
+            </button>
+            <DatabaseTable
+              databases={databases}
+              onEdit={(database) => setEditingDatabase(database)}
+              onDelete={(database) => {
+                void handleDeleteDatabase(database);
               }}
             />
           </>

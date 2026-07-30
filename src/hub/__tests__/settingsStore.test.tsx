@@ -1,11 +1,17 @@
 import { SettingsStore, SettingsConflictError, DocumentManager } from '../settingsStore';
-import { DefaultsConfig, RunnerConfig } from '../../shared/types';
+import { DatabaseConfig, DefaultsConfig, RunnerConfig } from '../../shared/types';
 
 const runner = (over: Partial<RunnerConfig> = {}): RunnerConfig => ({
   alias: 'baseline',
   image: 'registry.example.com/trivy:0.58.1',
   isDefault: true,
   enabled: true,
+  ...over,
+});
+
+const database = (over: Partial<DatabaseConfig> = {}): DatabaseConfig => ({
+  alias: 'baseline-db',
+  repository: 'registry.example.com/trivy-db:2',
   ...over,
 });
 
@@ -121,5 +127,40 @@ describe('SettingsStore', () => {
     await expect(store.saveRunners([runner()])).rejects.toThrow(SettingsConflictError);
     await store.saveRunners([runner()]);
     expect(manager.setCalls[1]).toMatchObject({ __etag: -1 });
+  });
+
+  it('returns an empty catalogue when the databases document does not exist yet', async () => {
+    const store = new SettingsStore(new FakeManager());
+    await expect(store.loadDatabases()).resolves.toEqual([]);
+  });
+
+  it('reads the database catalogue out of a stored document', async () => {
+    const manager = new FakeManager();
+    manager.documents.set('databases', { id: 'databases', __etag: 3, value: [database()] });
+    const store = new SettingsStore(manager);
+    await expect(store.loadDatabases()).resolves.toEqual([database()]);
+  });
+
+  it('writes the catalogue under the databases document id', async () => {
+    const manager = new FakeManager();
+    const store = new SettingsStore(manager);
+    await store.saveDatabases([database()]);
+    expect(manager.setCalls[0]).toMatchObject({ id: 'databases', value: [database()], __etag: -1 });
+  });
+
+  it('reports a databases save conflict as SettingsConflictError, same as runners', async () => {
+    const manager = new FakeManager();
+    manager.conflictOnce = true;
+    const store = new SettingsStore(manager);
+    await expect(store.saveDatabases([database()])).rejects.toThrow(SettingsConflictError);
+  });
+
+  it('sends the etag it last read for databases, so a concurrent edit is detected', async () => {
+    const manager = new FakeManager();
+    manager.documents.set('databases', { id: 'databases', __etag: 9, value: [] });
+    const store = new SettingsStore(manager);
+    await store.loadDatabases();
+    await store.saveDatabases([database()]);
+    expect(manager.setCalls[0]).toMatchObject({ __etag: 9 });
   });
 });

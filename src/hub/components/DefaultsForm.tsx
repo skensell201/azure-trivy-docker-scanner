@@ -20,11 +20,6 @@ function splitList(raw: string): string[] {
 }
 
 export function DefaultsForm({ defaults, onSave }: DefaultsFormProps): JSX.Element {
-  const [dbRepository, setDbRepository] = React.useState(defaults.dbRepository ?? '');
-  const [javaDbRepository, setJavaDbRepository] = React.useState(defaults.javaDbRepository ?? '');
-  const [dbRegistryUsername, setDbRegistryUsername] = React.useState(
-    defaults.dbRegistryUsername ?? '',
-  );
   const [cacheDir, setCacheDir] = React.useState(defaults.cacheDir ?? '');
   const [skipDbUpdate, setSkipDbUpdate] = React.useState(defaults.skipDbUpdate ?? false);
   const [severities, setSeverities] = React.useState((defaults.severities ?? []).join(','));
@@ -36,28 +31,40 @@ export function DefaultsForm({ defaults, onSave }: DefaultsFormProps): JSX.Eleme
   );
   const [issues, setIssues] = React.useState<ValidationIssue[]>([]);
 
-  // Same treatment as RunnerConfig.registryPassword in RunnerForm: never rendered, carried
-  // through untouched unless the administrator explicitly chooses to replace it, so saving a
-  // form nobody edited cannot wipe the database mirror's credential out of the settings document.
-  const hasStoredPassword = Boolean(defaults.dbRegistryPassword);
-  const [replacingPassword, setReplacingPassword] = React.useState(!hasStoredPassword);
-  const [newPassword, setNewPassword] = React.useState('');
+  // `dbRepository`/`javaDbRepository`/`dbRegistryUsername`/`dbRegistryPassword` are deprecated
+  // (see DefaultsConfig's doc comment): a database now belongs to a runner via the Databases tab,
+  // not to this form. But an administrator who has not yet linked every runner to a cataloged
+  // database still depends on whatever is stored here as the fallback, so this form must neither
+  // render nor let an unrelated save silently erase it - see `hasLegacyDatabaseSettings` and the
+  // unconditional carry-through in `build` below.
+  const hasLegacyDatabaseSettings = Boolean(
+    defaults.dbRepository ||
+      defaults.javaDbRepository ||
+      defaults.dbRegistryUsername ||
+      defaults.dbRegistryPassword,
+  );
 
   const build = (): DefaultsConfig => {
-    const next: DefaultsConfig = { dbRepository: dbRepository.trim() };
-    if (javaDbRepository.trim()) {
-      next.javaDbRepository = javaDbRepository.trim();
+    const next: DefaultsConfig = {};
+
+    // Carried through untouched: this form has no field for any of these, so there is nothing an
+    // administrator could have "edited" here, and saving unrelated defaults must not wipe out the
+    // fallback a not-yet-migrated runner still depends on.
+    if (defaults.dbRepository !== undefined) {
+      next.dbRepository = defaults.dbRepository;
     }
-    if (cacheDir.trim()) {
-      next.cacheDir = cacheDir.trim();
+    if (defaults.javaDbRepository !== undefined) {
+      next.javaDbRepository = defaults.javaDbRepository;
     }
-    if (dbRegistryUsername.trim()) {
-      next.dbRegistryUsername = dbRegistryUsername.trim();
+    if (defaults.dbRegistryUsername !== undefined) {
+      next.dbRegistryUsername = defaults.dbRegistryUsername;
+    }
+    if (defaults.dbRegistryPassword !== undefined) {
+      next.dbRegistryPassword = defaults.dbRegistryPassword;
     }
 
-    const password = replacingPassword ? newPassword : defaults.dbRegistryPassword;
-    if (password) {
-      next.dbRegistryPassword = password;
+    if (cacheDir.trim()) {
+      next.cacheDir = cacheDir.trim();
     }
 
     if (severities.trim()) {
@@ -92,46 +99,12 @@ export function DefaultsForm({ defaults, onSave }: DefaultsFormProps): JSX.Eleme
 
   return (
     <div className="trivy-defaults-form">
-      <label>
-        Database repository
-        <input value={dbRepository} onChange={(event) => setDbRepository(event.target.value)} />
-      </label>
-      <label>
-        Java DB repository
-        <input
-          value={javaDbRepository}
-          onChange={(event) => setJavaDbRepository(event.target.value)}
-        />
-      </label>
-      <label>
-        Database registry username
-        <input
-          value={dbRegistryUsername}
-          onChange={(event) => setDbRegistryUsername(event.target.value)}
-        />
-      </label>
-
-      {hasStoredPassword && !replacingPassword ? (
-        <div>
-          <span>A database registry password is stored.</span>{' '}
-          <button type="button" onClick={() => setReplacingPassword(true)}>
-            Replace password
-          </button>
-        </div>
-      ) : (
-        <label>
-          Database registry password
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-          />
-        </label>
-      )}
-      <p className="trivy-warning">
-        The database registry password is stored in clear text in the extension settings
-        document. Anyone with read access to this collection&apos;s extension data can read it.
-      </p>
+      {hasLegacyDatabaseSettings ? (
+        <p className="trivy-warning trivy-migration-note">
+          The database settings have moved to the Databases tab. These values are still being
+          used by runners with no database linked, and should be moved there.
+        </p>
+      ) : null}
 
       <label>
         Cache directory
