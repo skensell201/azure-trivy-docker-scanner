@@ -37,7 +37,22 @@ fs.writeFileSync(path.join(out, 'task.json'), JSON.stringify(taskJson, null, 2) 
 // in the installed-extensions list, so without this copy the task shows a generic placeholder.
 fs.copyFileSync(path.join(root, 'src', 'task', 'icon.png'), path.join(out, 'icon.png'));
 
+// Only what the task actually requires at runtime, named explicitly. Copying every root
+// dependency would ship the hub's browser libraries - react, react-dom and both extension SDKs -
+// to every build agent: fourteen megabytes the Node task never loads. Versions are still read
+// from the root package.json so the two cannot drift.
+const TASK_RUNTIME_DEPENDENCIES = ['azure-pipelines-task-lib'];
+
 const rootPackage = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const dependencies = {};
+for (const name of TASK_RUNTIME_DEPENDENCIES) {
+  const version = rootPackage.dependencies[name];
+  if (!version) {
+    throw new Error(`${name} is listed as a task runtime dependency but is not in package.json.`);
+  }
+  dependencies[name] = version;
+}
+
 fs.writeFileSync(
   path.join(out, 'package.json'),
   JSON.stringify(
@@ -45,7 +60,7 @@ fs.writeFileSync(
       name: 'trivy-scan-task',
       version: rootPackage.version,
       main: 'index.js',
-      dependencies: rootPackage.dependencies,
+      dependencies,
     },
     null,
     2,
