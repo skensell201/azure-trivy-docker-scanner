@@ -1,6 +1,7 @@
 import * as http from 'http';
 import * as https from 'https';
 import * as net from 'net';
+import * as tls from 'tls';
 import * as zlib from 'zlib';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -423,5 +424,26 @@ describe('httpFetch', () => {
       expect(response.ok).toBe(true);
       await expect(response.text()).resolves.toBe('{"value":[1,2]}');
     });
+
+    // The real defect this guards against: `index.ts`'s `buildFetch` must hand `ca` an array
+    // containing Node's own bundled roots (`tls.rootCertificates`) *alongside* whichever extra
+    // bundle it found (the agent's configured CA, or an OS trust bundle) - `https.request`
+    // replaces its root store with whatever `ca` holds rather than adding to it, so an
+    // implementation that passed only the extra bundle would still make this exact call succeed
+    // (the self-signed cert is right there in the array) while silently breaking every public
+    // host. Passing an array with the fixture's certificate mixed in among other, unrelated roots
+    // is the union case and the one that would regress.
+    itIfOpenssl(
+      'succeeds when the certificate is supplied inside an array alongside other roots (the union case)',
+      async () => {
+        const fetch = createHttpFetch({
+          ca: [...tls.rootCertificates, tlsFixture!.cert],
+          timeoutMs: 2000,
+        });
+        const response = await fetch(`${tlsBase}/doc`, { headers: {} });
+        expect(response.ok).toBe(true);
+        await expect(response.text()).resolves.toBe('{"value":[1,2]}');
+      },
+    );
   });
 });

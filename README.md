@@ -164,18 +164,29 @@ operating system's trust store without trouble, but this task is Node, and Node 
 whose Azure DevOps Server sits behind an internal PKI hits this immediately, and the symptom does
 not obviously point at certificates.
 
-Starting with `0.2.1` the task handles this automatically:
+Starting with `0.2.1` the task handles this automatically, and `0.2.2` closes the gap that
+mattered most in practice — an agent that was never given `--sslcacert` at all:
 
-- **The agent's own `--sslcacert` configuration is honored.** If the agent was installed with a
-  CA file (`tl.getHttpCertConfiguration().caFile`, the same setting the agent itself uses), the
-  task reads it and trusts it for its own HTTPS calls, in addition to Node's bundled roots. No
+- **The agent's own `--sslcacert` configuration is honored first.** If the agent was installed
+  with a CA file (`tl.getHttpCertConfiguration().caFile`, the same setting the agent itself uses),
+  the task reads it and trusts it for its own HTTPS calls, in addition to Node's bundled roots. No
   configuration is needed on the task or the pipeline for this case — if the agent already trusts
   the server, so does the task. If that CA file cannot be read for some reason, the task logs a
   warning naming the path and continues with Node's default trusted roots, since the request may
   still succeed anyway (for example, behind a load balancer with a public certificate).
-- **`NODE_EXTRA_CA_CERTS` is the fallback** when the agent was not configured with `--sslcacert`
-  (or its CA file cannot be read). Set it as an environment variable on the pipeline step, pointing
-  at a PEM file on the agent, and Node picks it up directly:
+- **The operating system's own trust bundle is used automatically on Linux agents** when the
+  agent has no `--sslcacert` configured. This is the common on-premises case: the OS already trusts
+  the internal CA (docker pulls from the internal registry already prove that), but Node on Linux
+  never consults the OS trust store on its own — it carries its own bundled roots instead. The task
+  now looks for the OS bundle at the usual locations (`/etc/ssl/certs/ca-certificates.crt`,
+  `/etc/pki/tls/certs/ca-bundle.crt`, `/etc/ssl/ca-bundle.pem`) and trusts whichever one it finds,
+  again in addition to Node's bundled roots. **No pipeline change is needed for this case either.**
+  Windows and macOS agents have none of these paths and simply fall through to Node's defaults, as
+  before.
+- **`NODE_EXTRA_CA_CERTS` remains a fallback** for the unusual layout neither of the above covers
+  (a CA bundle somewhere other than the well-known paths, or a non-Linux agent). Set it as an
+  environment variable on the pipeline step, pointing at a PEM file on the agent, and Node picks it
+  up directly:
 
   ```yaml
   - task: TrivyScan@1

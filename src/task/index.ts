@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as tls from 'tls';
 import * as tl from 'azure-pipelines-task-lib/task';
 import { ConfigClient, FetchLike } from './ConfigClient';
 import { createHttpFetch, httpFetch } from './httpFetch';
@@ -6,8 +7,22 @@ import { readInputs } from './inputs';
 import { ChildProcessRunner } from './ProcessRunner';
 import { Publisher } from './Publisher';
 import { runScan } from './run';
+import { selectOsCaBundlePath } from './trustSource';
 import { validateCatalog, validateDefaults, validateRunner } from '../shared/validation';
 import { AgentContext, DefaultsConfig, RunnerConfig } from '../shared/types';
+
+/**
+ * Well-known locations for the operating system's CA trust bundle, in the order they are tried.
+ * These are the fallback used when the agent has no `--sslcacert` of its own (see `buildFetch`
+ * below) - covering an on-premises install where nobody thought to pass that flag, but the OS
+ * itself already trusts the internal PKI (as docker pulls from the internal registry prove).
+ * Windows and macOS agents have none of these paths, land on Node's defaults, and that is fine.
+ */
+const OS_CA_BUNDLE_CANDIDATES = [
+  '/etc/ssl/certs/ca-certificates.crt', // Debian, Ubuntu, Alpine
+  '/etc/pki/tls/certs/ca-bundle.crt', // RHEL, CentOS, Fedora
+  '/etc/ssl/ca-bundle.pem', // SUSE
+];
 
 const PUBLISHER = 'iksoftware';
 const EXTENSION_ID = 'trivy-docker-scanner';
@@ -35,40 +50,97 @@ function nextScanIndex(): number {
 }
 
 /**
- * Reads the CA the agent was configured with at install time (`--sslcacert`, surfaced by
- * `tl.getHttpCertConfiguration().caFile`), so this task's own HTTPS calls trust the same internal
- * PKI the .NET agent already trusts via the OS trust store. Node on Linux does not read that
- * store - it carries its own bundled roots - so on a server with an internal CA this is the one
- * thing standing between a working task and "unable to get local issuer certificate" on literally
- * the first request the task makes (reading the "runners" settings document).
+ * Builds the CA list to hand `createHttpFetch`: Node's own bundled roots *plus* one extra trusted
+ * bundle, never the extra bundle alone.
+ *
+ * This is the detail that is easy to "simplify" back into a bug: `https.request`'s `ca` option
+ * *replaces* Node's bundled root store rather than adding to it. Passing it only the agent's (or
+ * the OS's) CA bundle would silently drop every root Node ships - and if that particular bundle
+ * happened to be incomplete (an internal-only distribution missing a root a public host needs, or
+ * simply a distro whose maintainers pruned something), TLS to unrelated public hosts would start
+ * failing while everything looked like it had been "fixed". `tls.rootCertificates` (an array of
+ * PEM strings, available since Node 12) is Node's own bundled store; concatenating it with the
+ * extra bundle and handing `https.request` the whole array - which it accepts, per its own type -
+ * is the union, not a replacement.
+ */
+function unionWithNodeRoots(extra: Buffer): Array<string | Buffer> {
+  return [...tls.rootCertificates, extra];
+}
+
+/**
+ * Chooses which CA (if any) this task's own HTTPS calls should trust, beyond Node's bundled roots,
+ * so a "runners" settings read does not fail with "unable to get local issuer certificate" on a
+ * server behind an internal PKI. Tried in order:
+ *
+ * 1. The agent's own `--sslcacert` configuration (`tl.getHttpCertConfiguration().caFile`) - the
+ *    same CA the .NET agent itself was explicitly told to trust. An administrator who set this up
+ *    meant it, so it always wins when present.
+ * 2. Failing that, the operating system's own trust bundle, at whichever of the well-known
+ *    locations in `OS_CA_BUNDLE_CANDIDATES` exists first. This is the case this fallback exists
+ *    for: an on-premises agent whose OS already trusts the internal CA (docker pulls from the
+ *    internal registry already prove that) but that was never configured with `--sslcacert`,
+ *    because Node on Linux does not consult the OS trust store on its own - it carries its own
+ *    bundled roots instead.
+ * 3. Failing that, Node's defaults, unchanged. Windows and macOS agents have none of the
+ *    OS_CA_BUNDLE_CANDIDATES paths and always land here; that is expected, not an error, so no
+ *    warning is logged for it - a warning belongs only where something *was* configured (or
+ *    found) and could not be used.
  *
  * `certFile`/`keyFile` (a client certificate, i.e. mutual TLS) are deliberately ignored: that is a
  * different feature from trusting a CA, nobody has asked for it, and wiring it through only
  * partway (e.g. without also handling `passphrase`/`certArchiveFile` correctly) would be worse
  * than not touching it at all.
  *
- * A CA file that cannot be read must not fail the whole task: the request may well succeed anyway
- * (a proxy or load balancer terminating TLS with a publicly-trusted cert, for instance), so this
- * warns, names the path, and falls back to `httpFetch` (Node's bundled roots only) rather than
- * throwing.
+ * Every path here logs, via `tl.debug`, which of the three sources was actually used - so when
+ * someone does hit a certificate problem, the log can answer "which trust store was in play"
+ * instead of leaving that to be guessed at.
  */
 function buildFetch(): FetchLike {
   const certConfiguration = tl.getHttpCertConfiguration();
-  if (!certConfiguration?.caFile) {
-    return httpFetch;
+
+  if (certConfiguration?.caFile) {
+    try {
+      const ca = fs.readFileSync(certConfiguration.caFile);
+      tl.debug(
+        `buildFetch: trusting the agent's configured CA file (${certConfiguration.caFile}), ` +
+          "in addition to Node's bundled roots.",
+      );
+      return createHttpFetch({ ca: unionWithNodeRoots(ca) });
+    } catch (error) {
+      // A CA file that cannot be read must not fail the whole task: the request may well succeed
+      // anyway (a proxy or load balancer terminating TLS with a publicly-trusted cert, for
+      // instance). Something was explicitly configured here and could not be used, so - unlike
+      // the OS-bundle and Node-defaults paths below - this does warrant a warning naming the path.
+      tl.warning(
+        `The agent's configured CA file (${certConfiguration.caFile}) could not be read: ` +
+          `${(error as Error).message}. Continuing with Node's default trusted roots; the request ` +
+          'may still succeed.',
+      );
+      return httpFetch;
+    }
   }
 
-  try {
-    const ca = fs.readFileSync(certConfiguration.caFile);
-    return createHttpFetch({ ca });
-  } catch (error) {
-    tl.warning(
-      `The agent's configured CA file (${certConfiguration.caFile}) could not be read: ` +
-        `${(error as Error).message}. Continuing with Node's default trusted roots; the request ` +
-        'may still succeed.',
-    );
-    return httpFetch;
+  const osBundlePath = selectOsCaBundlePath(OS_CA_BUNDLE_CANDIDATES, fs.existsSync);
+  if (osBundlePath) {
+    try {
+      const ca = fs.readFileSync(osBundlePath);
+      tl.debug(
+        `buildFetch: no agent CA configured; trusting the OS trust bundle at ${osBundlePath}, ` +
+          "in addition to Node's bundled roots.",
+      );
+      return createHttpFetch({ ca: unionWithNodeRoots(ca) });
+    } catch {
+      // Exists (per fs.existsSync) but could not be read - a permissions oddity, or a race with
+      // deletion. Nobody configured this path; it was merely found, so per the rule above it does
+      // not get a warning. Node's defaults are exactly as usable as if the path had never existed.
+    }
   }
+
+  tl.debug(
+    "buildFetch: no agent CA configured and no OS trust bundle found; using Node's default " +
+      'trusted roots only.',
+  );
+  return httpFetch;
 }
 
 /**

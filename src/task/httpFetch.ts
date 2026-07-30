@@ -38,12 +38,14 @@ function sanitizeUrlForDisplay(rawUrl: string): string {
  */
 export interface CreateHttpFetchOptions {
   /**
-   * Extra certificate authority to trust, in addition to Node's bundled root store — typically
-   * the contents of the agent's `--sslcacert` file (`tl.getHttpCertConfiguration().caFile`), read
-   * by the caller. Passed straight through to `https.request`'s own `ca` option, so it accepts
-   * whatever that accepts (a single PEM string/Buffer, PEM chain, etc.).
+   * Certificate authority/authorities to trust. Passed straight through to `https.request`'s own
+   * `ca` option, so it accepts whatever that accepts: a single PEM string/Buffer, or an array of
+   * them. The caller (`index.ts`'s `buildFetch`) is the one that knows whether this replaces or
+   * extends Node's bundled roots — `https.request` treats `ca` as a full replacement, not an
+   * addition, so a caller that wants to keep trusting the public web alongside an internal CA must
+   * pass an array containing both, e.g. `[...tls.rootCertificates, agentOrOsBundle]`.
    */
-  ca?: string | Buffer;
+  ca?: string | Buffer | Array<string | Buffer>;
   /**
    * Default timeout in milliseconds applied to requests made with the returned function when the
    * call site does not pass its own (see the third parameter of the returned `FetchLike`).
@@ -69,7 +71,7 @@ function performFetch(
   url: string,
   init: { headers: Record<string, string> },
   timeoutMs: number,
-  ca: string | Buffer | undefined,
+  ca: string | Buffer | Array<string | Buffer> | undefined,
 ): Promise<{ ok: boolean; status: number; text(): Promise<string> }> {
   const displayUrl = sanitizeUrlForDisplay(url);
 
