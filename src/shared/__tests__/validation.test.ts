@@ -543,9 +543,23 @@ describe('validateDatabase', () => {
     expect(issues).toEqual([{ field: 'repository', message: expect.stringContaining('required') }]);
   });
 
-  it('rejects the latest tag on the repository because it is not reproducible', () => {
-    const issues = validateDatabase(database({ repository: 'registry.example.com/trivy-db:latest' }));
-    expect(issues).toEqual([{ field: 'repository', message: expect.stringContaining('latest') }]);
+  // --- repository/javaRepository: unlike a runner's image, an untagged reference is normal.
+  // The tag here (when present) is the database *schema* version trivy understands (upstream:
+  // ghcr.io/aquasecurity/trivy-db:2), not a build; trivy appends its own schema version when the
+  // repository carries none, and vendors (e.g. registry.red-soft.ru/trivy-db/trivy-db) publish
+  // exactly that untagged form. ---
+
+  it('accepts a repository with no tag at all, since trivy appends the schema version itself', () => {
+    expect(validateDatabase(database({ repository: 'registry.red-soft.ru/trivy-db/trivy-db' }))).toEqual([]);
+  });
+
+  it('accepts the latest tag on the repository: the reproducibility rationale for rejecting it does not apply to a schema-version tag', () => {
+    expect(validateDatabase(database({ repository: 'registry.example.com/trivy-db:latest' }))).toEqual([]);
+  });
+
+  it('rejects a repository tag that is not syntactically valid, even though a tag is optional', () => {
+    const issues = validateDatabase(database({ repository: 'registry.example.com/trivy-db:0.58.1 --privileged' }));
+    expect(issues).toEqual([{ field: 'repository', message: expect.stringContaining('tag') }]);
   });
 
   it('accepts a digest reference on the repository', () => {
@@ -558,9 +572,17 @@ describe('validateDatabase', () => {
     expect(validateDatabase(database())).toEqual([]);
   });
 
-  it('rejects a javaRepository with a bad reference, under the same rule as repository', () => {
-    const issues = validateDatabase(database({ javaRepository: 'registry.example.com/trivy-java-db:latest' }));
-    expect(issues).toEqual([{ field: 'javaRepository', message: expect.stringContaining('latest') }]);
+  it('accepts a javaRepository with no tag at all, for the same reason as repository', () => {
+    expect(
+      validateDatabase(database({ javaRepository: 'registry.example.com/trivy-java-db' })),
+    ).toEqual([]);
+  });
+
+  it('rejects a javaRepository with a syntactically invalid tag, under the same rule as repository', () => {
+    const issues = validateDatabase(
+      database({ javaRepository: 'registry.example.com/trivy-java-db:0.58.1 --privileged' }),
+    );
+    expect(issues).toEqual([{ field: 'javaRepository', message: expect.stringContaining('tag') }]);
   });
 
   it('accepts a well-formed javaRepository', () => {

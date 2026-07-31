@@ -224,9 +224,16 @@ one explicitly, or falls back to the deprecated fields on `defaults` (see the ne
 "Migrating to the database catalogue" above).
 
 Validation rules (`src/shared/validation.ts`): `alias` follows the same shape rule as a runner
-alias; `repository` needs an explicit tag other than `latest`, or a `@sha256:...` digest, same as
-a runner's `image`; `javaRepository`, if set, is held to the same rule; `registryUsername` and
-`registryPassword` are optional but must be set together, same as the runner catalog's pair.
+alias; `repository` is not held to the same tag rule as a runner's `image` -- its tag, when
+present, names the database *schema* version trivy understands (for example
+`ghcr.io/aquasecurity/trivy-db:2`), not a build, and trivy appends its own schema version when
+the repository carries none, so an untagged `repository` (as published by some vendors, e.g.
+`registry.red-soft.ru/trivy-db/trivy-db`) is accepted. A tag, if present, must still be
+syntactically valid, but `latest` is not specially rejected here: the reproducibility rationale
+for rejecting it on a runner's `image` does not apply to a schema-version tag. A `@sha256:...`
+digest is accepted as always. `javaRepository`, if set, follows the same rule as `repository`;
+`registryUsername` and `registryPassword` are optional but must be set together, same as the
+runner catalog's pair.
 Deleting an entry that a runner still points at is refused — the error names the runner, so an
 administrator can re-link or remove it there first.
 

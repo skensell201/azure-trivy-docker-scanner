@@ -19,9 +19,10 @@ export interface ValidationIssue {
 // underscore and dot are as safe here as dash already was.
 const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,30}$/;
 
-// A digest reference (`@sha256:<hex>`) pins exact image content, which is
-// strictly more reproducible than any tag. It is accepted regardless of
-// what tag, if any, precedes the digest marker.
+// A digest reference (`@sha256:<hex>`) pins exact content, which is strictly more
+// reproducible than any tag -- true of a runner's image and, just as much, of a
+// database repository's data. It is accepted regardless of what tag, if any,
+// precedes the digest marker.
 const DIGEST_MARKER = '@sha256:';
 
 // A conventional Docker tag: 1-128 characters, starting with an alnum or
@@ -53,18 +54,33 @@ function validateAliasField(alias: unknown, field: string): ValidationIssue[] {
 }
 
 /**
- * Validates an image-or-database reference: required, a string, and carrying either an
- * explicit tag or an `@sha256:` digest (see DIGEST_MARKER above for why a digest is accepted
- * regardless of what tag, if any, precedes it). Shared by `RunnerConfig.image` and
- * `DatabaseConfig`'s `repository`/`javaRepository`, which are all held to the same
- * reproducibility rule; only the field name, the human-readable label used in messages, and
- * the "required" wording differ between callers.
+ * Validates an image-or-database reference: required, a string, and syntactically valid.
+ * Shared by `RunnerConfig.image` and `DatabaseConfig`'s `repository`/`javaRepository`, but the
+ * three fields are no longer held to one shared rule (see the git history of this comment for
+ * the earlier, incorrect claim that they were):
+ *
+ * - `image` names a build of trivy. An untagged image is a moving target, so it must carry
+ *   either an explicit tag or an `@sha256:` digest (see DIGEST_MARKER above), and its tag
+ *   additionally rejects `latest`, which defeats reproducibility just as much as no tag at all.
+ * - `repository`/`javaRepository` name a vulnerability database. Their tag, when present, is
+ *   the database *schema* version trivy understands (upstream: `ghcr.io/aquasecurity/trivy-db:2`,
+ *   where `2` is the schema, not a build), and trivy appends its own schema version when the
+ *   repository carries none -- so an untagged database repository is normal, vendor-documented
+ *   usage (e.g. `registry.red-soft.ru/trivy-db/trivy-db`), not an oversight, and `tagOptional`
+ *   accepts it outright. `rejectLatest` is also off for these two fields: the database's
+ *   contents behind any given tag change several times a day by design, so pinning a tag buys
+ *   no reproducibility here the way it does for `image`, and the rationale for rejecting
+ *   `latest` specifically ("scans must be reproducible") never applied to a schema-version tag.
+ *
+ * Whenever a tag *is* present, on any of the three fields, it must still match TAG_PATTERN --
+ * only whether a tag is required, and whether `latest` is specially rejected, differ.
  */
 function validateReferenceField(
   value: unknown,
   field: string,
   label: string,
   requiredMessage: string,
+  { tagOptional = false, rejectLatest = true }: { tagOptional?: boolean; rejectLatest?: boolean } = {},
 ): ValidationIssue[] {
   if (typeof value !== 'string' || value.trim().length === 0) {
     return [{ field, message: requiredMessage }];
@@ -79,6 +95,10 @@ function validateReferenceField(
   const tagSeparator = reference.lastIndexOf(':');
   const hasTag = tagSeparator > reference.lastIndexOf('/');
   if (!hasTag) {
+    if (tagOptional) {
+      // Accepted deliberately: see this function's doc comment above.
+      return [];
+    }
     return [
       {
         field,
@@ -88,7 +108,7 @@ function validateReferenceField(
   }
 
   const tag = reference.slice(tagSeparator + 1);
-  if (tag === 'latest') {
+  if (rejectLatest && tag === 'latest') {
     return [{ field, message: 'The latest tag is not allowed because scans must be reproducible.' }];
   }
   if (!TAG_PATTERN.test(tag)) {
@@ -436,8 +456,14 @@ export function validateDatabase(database: unknown): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
   issues.push(...validateAliasField(database.alias, 'alias'));
+  // tagOptional/rejectLatest: false -- see validateReferenceField's doc comment for why a
+  // database repository's tag (a schema version) is optional, and why `latest` is not specially
+  // rejected here the way it is for a runner's image.
   issues.push(
-    ...validateReferenceField(database.repository, 'repository', 'Repository', 'Repository is required.'),
+    ...validateReferenceField(database.repository, 'repository', 'Repository', 'Repository is required.', {
+      tagOptional: true,
+      rejectLatest: false,
+    }),
   );
 
   if (database.javaRepository !== undefined) {
@@ -447,6 +473,7 @@ export function validateDatabase(database: unknown): ValidationIssue[] {
         'javaRepository',
         'javaRepository',
         'javaRepository must be a non-empty string when set.',
+        { tagOptional: true, rejectLatest: false },
       ),
     );
   }
