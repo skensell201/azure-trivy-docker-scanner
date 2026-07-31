@@ -183,8 +183,9 @@ compatibility with a settings document written before the catalogue existed: a r
 "Migrating to the database catalogue" above), and every scan that runner performs logs a warning
 saying so. A new runner should always set `database` explicitly.
 
-Validation rules (`src/shared/validation.ts`): `alias` must be lowercase letters, digits and
-dashes, 2-31 characters; `image` needs an explicit tag other than `latest`, or a `@sha256:...`
+Validation rules (`src/shared/validation.ts`): `alias` must be lowercase letters, digits,
+dashes, underscores and dots, 2-31 characters, starting with a letter or digit; `image` needs
+an explicit tag other than `latest`, or a `@sha256:...`
 digest; the catalog must contain exactly one runner with `isDefault: true` that is not disabled
 (`enabled: false`); `registryUsername` and `registryPassword` are optional but must be set
 together — one without the other fails validation; `database`, if set, must name an alias that

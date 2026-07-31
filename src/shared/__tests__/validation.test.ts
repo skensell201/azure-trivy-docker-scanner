@@ -113,6 +113,33 @@ describe('validateRunner', () => {
     expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
   });
 
+  // --- Fix 5: underscore and dot are safe wherever an alias actually goes (a lookup key,
+  // and a value a pipeline author writes in YAML) and were only excluded by an over-strict
+  // original pattern, not by anything downstream that needs them excluded. ---
+
+  it('accepts an alias containing underscores', () => {
+    expect(validateRunner(runner({ alias: 'red_soft_html' }))).toEqual([]);
+  });
+
+  it('accepts an alias containing dots', () => {
+    expect(validateRunner(runner({ alias: 'red.soft.html' }))).toEqual([]);
+  });
+
+  it('rejects an alias starting with an underscore', () => {
+    const issues = validateRunner(runner({ alias: '_red-soft' }));
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
+  });
+
+  it('rejects an alias starting with a dot', () => {
+    const issues = validateRunner(runner({ alias: '.red-soft' }));
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
+  });
+
+  it('rejects an uppercase alias, since aliases are compared case-sensitively', () => {
+    const issues = validateRunner(runner({ alias: 'Prod' }));
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
+  });
+
   it('accepts a repository name containing "latest" as a substring, only rejecting the tag itself', () => {
     expect(validateRunner(runner({ image: 'registry.example.com/latest-trivy:0.58.1' }))).toEqual([]);
   });
@@ -494,6 +521,20 @@ describe('validateDatabase', () => {
 
   it('rejects an alias that is not lowercase kebab', () => {
     const issues = validateDatabase(database({ alias: 'Bad Alias' }));
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
+  });
+
+  it('accepts an alias containing underscores, the real example that motivated relaxing this rule', () => {
+    expect(validateDatabase(database({ alias: 'red_soft_html' }))).toEqual([]);
+  });
+
+  it('rejects an alias starting with an underscore', () => {
+    const issues = validateDatabase(database({ alias: '_red-soft' }));
+    expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
+  });
+
+  it('rejects an uppercase alias, since aliases are compared case-sensitively', () => {
+    const issues = validateDatabase(database({ alias: 'Prod' }));
     expect(issues).toEqual([{ field: 'alias', message: expect.stringContaining('lowercase') }]);
   });
 

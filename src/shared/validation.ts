@@ -7,9 +7,17 @@ export interface ValidationIssue {
   message: string;
 }
 
-// The pattern anchors one leading alnum, then allows 1-30 more alnum/dash
-// characters, so the accepted total length is 2-31 characters (1 + [1,30]).
-const ALIAS_PATTERN = /^[a-z0-9][a-z0-9-]{1,30}$/;
+// The pattern anchors one leading alnum, then allows 1-30 more
+// alnum/dash/underscore/dot characters, so the accepted total length is
+// 2-31 characters (1 + [1,30]). Punctuation cannot lead: an alias is
+// compared exactly, and starting with punctuation buys nothing an
+// alnum-first alias doesn't already have. An alias never becomes a
+// container name, a filesystem path, a URL or an argv token (the
+// container name is built from the build id and scan index, not the
+// alias) -- it is only ever a lookup key in a settings document and a
+// value a pipeline author writes in YAML (`runner: 'baseline'`), so
+// underscore and dot are as safe here as dash already was.
+const ALIAS_PATTERN = /^[a-z0-9][a-z0-9_.-]{1,30}$/;
 
 // A digest reference (`@sha256:<hex>`) pins exact image content, which is
 // strictly more reproducible than any tag. It is accepted regardless of
@@ -29,7 +37,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Validates an alias against ALIAS_PATTERN. Shared by `RunnerConfig.alias` and
  * `DatabaseConfig.alias`, which are held to the identical shape rule: lowercase letters,
- * digits and dashes, 2 to 31 characters, starting with a letter or digit.
+ * digits, dashes, underscores and dots, 2 to 31 characters, starting with a letter or digit.
  */
 function validateAliasField(alias: unknown, field: string): ValidationIssue[] {
   if (typeof alias !== 'string' || !ALIAS_PATTERN.test(alias)) {
@@ -37,7 +45,7 @@ function validateAliasField(alias: unknown, field: string): ValidationIssue[] {
       {
         field,
         message:
-          'Alias must be lowercase letters, digits and dashes, 2 to 31 characters, starting with a letter or digit.',
+          'Alias must be lowercase letters, digits, dashes, underscores and dots, 2 to 31 characters, starting with a letter or digit.',
       },
     ];
   }
