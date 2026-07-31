@@ -13,6 +13,7 @@ class FakeStore {
   databases: DatabaseConfig[] = [];
   savedRunners: RunnerConfig[][] = [];
   savedDatabases: DatabaseConfig[][] = [];
+  savedDefaults: DefaultsConfig[] = [];
   failNextSave: Error | undefined;
 
   loadRunners = jest.fn(async () => this.runners);
@@ -26,7 +27,9 @@ class FakeStore {
     }
     this.savedRunners.push(runners);
   });
-  saveDefaults = jest.fn(async () => undefined);
+  saveDefaults = jest.fn(async (defaults: DefaultsConfig) => {
+    this.savedDefaults.push(defaults);
+  });
   saveDatabases = jest.fn(async (databases: DatabaseConfig[]) => {
     if (this.failNextSave) {
       const error = this.failNextSave;
@@ -82,7 +85,7 @@ describe('App', () => {
     expect(store.savedRunners[0].map((runner) => runner.alias)).toEqual(['baseline', 'hardened']);
   });
 
-  it('refuses to save a catalog the task would reject', async () => {
+  it('refuses to save a catalog the task would reject, leaving the pane open with the entered values', async () => {
     const store = new FakeStore();
     render(<App store={store} />);
     await screen.findByText('baseline');
@@ -93,6 +96,14 @@ describe('App', () => {
     await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
     await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/exactly one/i));
     expect(store.saveRunners).not.toHaveBeenCalled();
+    // The rejected save must not throw the in-progress edit away: the pane stays open and the
+    // administrator's own typing is still there, not just the alert telling them something was
+    // wrong.
+    expect((screen.getByLabelText(/alias/i) as HTMLInputElement).value).toBe('hardened');
+    expect((screen.getByLabelText(/image/i) as HTMLInputElement).value).toBe(
+      'registry.example.com/trivy-fips:0.58.1',
+    );
+    expect((screen.getByLabelText(/default runner/i) as HTMLInputElement).checked).toBe(true);
   });
 
   it('tells the administrator when someone else changed the settings', async () => {
@@ -243,7 +254,7 @@ describe('App', () => {
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
-  it('refuses to save a runner naming a database that no longer exists, since the two documents can disagree', async () => {
+  it('refuses to save a runner naming a database that no longer exists, since the two documents can disagree, leaving the pane open', async () => {
     const store = new FakeStore();
     store.runners = [
       {
@@ -265,6 +276,32 @@ describe('App', () => {
     expect(screen.getByRole('alert').textContent).toMatch(/missing-db/);
     expect(screen.getByRole('alert').textContent).toMatch(/baseline/);
     expect(store.saveRunners).not.toHaveBeenCalled();
+    // Same property as the add case above: the rejected save leaves the edit pane open rather
+    // than dropping the administrator back at "select a runner", with the edited runner's own
+    // values still shown.
+    expect((screen.getByLabelText(/alias/i) as HTMLInputElement).value).toBe('baseline');
+  });
+
+  it('refuses to save a database catalogue with a duplicate alias, leaving the pane open with the entered values', async () => {
+    const store = new FakeStore();
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /databases/i }));
+    await screen.findByText('official');
+    await userEvent.click(screen.getByRole('button', { name: /add database/i }));
+    await userEvent.type(screen.getByLabelText('Alias'), 'official');
+    await userEvent.type(screen.getByLabelText(/^repository$/i), 'registry.example.com/trivy-db-dupe:2');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toMatch(/duplicate/i));
+    expect(store.saveDatabases).not.toHaveBeenCalled();
+    // The rejected save must not throw the in-progress edit away, same as for runners.
+    expect((screen.getByLabelText('Alias') as HTMLInputElement).value).toBe('official');
+    expect((screen.getByLabelText(/^repository$/i) as HTMLInputElement).value).toBe(
+      'registry.example.com/trivy-db-dupe:2',
+    );
   });
 
   it('offers the database catalogue and the not-linked option when adding a runner', async () => {
@@ -439,5 +476,56 @@ describe('App', () => {
 
     const unlinkedRow = screen.getByText('legacy').closest('li');
     expect(unlinkedRow?.textContent).toMatch(/deprecated Defaults settings/i);
+  });
+
+  // --- Finishing the migration: retiring the legacy database fields ---
+
+  it('offers to remove the legacy database settings once every runner is linked, and does so on confirmation', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      {
+        alias: 'baseline',
+        image: 'registry.example.com/trivy:0.58.1',
+        isDefault: true,
+        enabled: true,
+        database: 'official',
+      },
+    ];
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    store.defaults = { dbRepository: 'registry.example.com/trivy-db:2', cacheDir: '/cache' };
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /defaults/i }));
+
+    expect(screen.getByText(/nothing uses these any more/i)).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: /remove legacy database settings/i }));
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /yes, remove them/i }));
+    });
+
+    await waitFor(() => expect(store.saveDefaults).toHaveBeenCalled());
+    const saved = store.savedDefaults[0];
+    expect(saved).not.toHaveProperty('dbRepository');
+    // Unrelated defaults that were never part of the legacy database fallback survive the removal
+    // untouched, since this is the same save path as any other defaults save.
+    expect(saved).toMatchObject({ cacheDir: '/cache' });
+    expect(await screen.findByText(/saved/i)).toBeTruthy();
+    // The now-unused legacy note is gone entirely, not just its button.
+    expect(screen.queryByText(/moved to the Databases tab/i)).toBeNull();
+  });
+
+  it('does not offer to remove the legacy database settings while a runner still has none, and names it', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+    ];
+    store.defaults = { dbRepository: 'registry.example.com/trivy-db:2' };
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+    await userEvent.click(screen.getByRole('tab', { name: /defaults/i }));
+
+    expect(screen.getByText(/still in use by 1 runner/i).textContent).toMatch(/baseline/);
+    expect(screen.queryByRole('button', { name: /remove legacy database settings/i })).toBeNull();
+    expect(store.saveDefaults).not.toHaveBeenCalled();
   });
 });

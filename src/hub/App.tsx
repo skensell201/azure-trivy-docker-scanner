@@ -137,8 +137,12 @@ export function App({ store }: AppProps): JSX.Element {
    * `nameRunnersInLinkIssues`'s doc comment). Used for add/edit, where the modal introduces a
    * runner the rest of the catalog has never seen; deleting an existing, already-valid runner
    * writes immediately (see `handleDeleteRunner`) instead of going through this gate.
+   *
+   * Returns whether the write actually landed - see `writeRunners` - so `handleSaveRunner` knows
+   * whether it is safe to close the pane: closing on a refusal would throw the administrator's
+   * in-progress edit away, leaving them to retype it having only been told something was wrong.
    */
-  const persistRunners = async (next: RunnerConfig[]): Promise<void> => {
+  const persistRunners = async (next: RunnerConfig[]): Promise<boolean> => {
     const found = [
       ...validateCatalog(next),
       ...next.flatMap((runner) => validateRunner(runner)),
@@ -146,12 +150,12 @@ export function App({ store }: AppProps): JSX.Element {
     ];
     if (found.length > 0) {
       setIssues(found);
-      return;
+      return false;
     }
     // A validated add/edit write can only ever produce a catalog validateCatalog accepts, so any
     // warning left over from an earlier delete no longer applies.
     setCatalogWarning([]);
-    await writeRunners(next);
+    return await writeRunners(next);
   };
 
   const handleSaveRunner = async (runner: RunnerConfig): Promise<void> => {
@@ -160,8 +164,14 @@ export function App({ store }: AppProps): JSX.Element {
       editing !== 'new' && editing !== undefined
         ? current.map((existing) => (existing === editing ? runner : existing))
         : [...current, runner];
-    setEditing(undefined);
-    await persistRunners(next);
+    // The pane closes only once the write has actually succeeded (see `persistRunners`'s doc
+    // comment). A *successful* save still closes it and shows the confirmation - leaving it open
+    // after a success would be its own kind of confusing - but a refused one leaves the pane, and
+    // the administrator's typing, exactly where they were.
+    const saved = await persistRunners(next);
+    if (saved) {
+      setEditing(undefined);
+    }
   };
 
   /**
@@ -194,6 +204,28 @@ export function App({ store }: AppProps): JSX.Element {
     }
   };
 
+  /**
+   * Finishes the migration DefaultsForm's carry-through machinery exists to make safe: strips
+   * the deprecated `dbRepository`/`javaDbRepository`/`dbRegistryUsername`/`dbRegistryPassword`
+   * fields and writes the result. Goes through `handleSaveDefaults` rather than its own write path
+   * so this destructive action gets the same conflict handling and confirmation banner as any
+   * other defaults save - there is nothing special about this write except what produced it.
+   * DefaultsForm only ever offers the action that calls this once every runner names its own
+   * database (see its `safeToRemoveLegacyDatabaseSettings`), so by the time this runs the fields
+   * being dropped are not any runner's fallback any more.
+   */
+  const handleRemoveLegacyDatabaseSettings = async (): Promise<void> => {
+    if (defaults === undefined) {
+      return;
+    }
+    const next: DefaultsConfig = { ...defaults };
+    delete next.dbRepository;
+    delete next.javaDbRepository;
+    delete next.dbRegistryUsername;
+    delete next.dbRegistryPassword;
+    await handleSaveDefaults(next);
+  };
+
   /** Writes a database catalogue and reflects the outcome, same shape as `writeRunners`. */
   const writeDatabases = async (next: DatabaseConfig[]): Promise<boolean> => {
     try {
@@ -219,8 +251,10 @@ export function App({ store }: AppProps): JSX.Element {
    * writing. Unlike runner deletion, there is no "write unconditionally, warn afterwards" path
    * for databases: a runner losing its database silently would leave a scan quietly falling back
    * to defaults nobody meant it to use, so this is always a blocking refusal.
+   *
+   * Returns whether the write actually landed, same shape and same reason as `persistRunners`.
    */
-  const persistDatabases = async (next: DatabaseConfig[]): Promise<void> => {
+  const persistDatabases = async (next: DatabaseConfig[]): Promise<boolean> => {
     const found = [
       ...validateDatabaseCatalogue(next),
       ...next.flatMap((database) => validateDatabase(database)),
@@ -228,9 +262,9 @@ export function App({ store }: AppProps): JSX.Element {
     ];
     if (found.length > 0) {
       setIssues(found);
-      return;
+      return false;
     }
-    await writeDatabases(next);
+    return await writeDatabases(next);
   };
 
   const handleSaveDatabase = async (database: DatabaseConfig): Promise<void> => {
@@ -239,8 +273,11 @@ export function App({ store }: AppProps): JSX.Element {
       editingDatabase !== 'new' && editingDatabase !== undefined
         ? current.map((existing) => (existing === editingDatabase ? database : existing))
         : [...current, database];
-    setEditingDatabase(undefined);
-    await persistDatabases(next);
+    // Same "close only on an actual write" rule as `handleSaveRunner`.
+    const saved = await persistDatabases(next);
+    if (saved) {
+      setEditingDatabase(undefined);
+    }
   };
 
   /**
@@ -434,8 +471,12 @@ export function App({ store }: AppProps): JSX.Element {
         {tab === 'defaults' ? (
           <DefaultsForm
             defaults={defaults}
+            runners={runners}
             onSave={(next) => {
               void handleSaveDefaults(next);
+            }}
+            onRemoveLegacyDatabaseSettings={() => {
+              void handleRemoveLegacyDatabaseSettings();
             }}
           />
         ) : null}
