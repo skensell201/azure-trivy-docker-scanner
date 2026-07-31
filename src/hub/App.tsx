@@ -1,5 +1,4 @@
 import * as React from 'react';
-import './hub.css';
 import { DatabaseConfig, DefaultsConfig, RunnerConfig } from '../shared/types';
 import {
   validateCatalog,
@@ -15,7 +14,7 @@ import { RunnerForm } from './components/RunnerForm';
 import { DatabaseTable } from './components/DatabaseTable';
 import { DatabaseForm } from './components/DatabaseForm';
 import { DefaultsForm } from './components/DefaultsForm';
-import { PolicyForm } from './components/PolicyForm';
+import { ALL_OVERRIDABLE_FIELDS, PolicyForm } from './components/PolicyForm';
 import { IssueList } from './components/IssueList';
 
 /**
@@ -54,6 +53,10 @@ function nameRunnersInLinkIssues(issues: ValidationIssue[], runners: RunnerConfi
     const alias = runners[Number(match[1])]?.alias;
     return alias ? { ...issue, message: `Runner "${alias}": ${issue.message}` } : issue;
   });
+}
+
+function pluralize(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
 }
 
 export function App({ store }: AppProps): JSX.Element {
@@ -262,113 +265,166 @@ export function App({ store }: AppProps): JSX.Element {
 
   if (loadError !== undefined) {
     return (
-      <div role="alert">
-        Could not load settings: {loadError}
+      <div className="trivy-hub">
+        <div role="alert" className="trivy-issues trivy-load-error">
+          Could not load settings: {loadError}
+        </div>
       </div>
     );
   }
 
   if (runners === undefined || defaults === undefined || databases === undefined) {
-    return <p role="status">Loading…</p>;
+    return (
+      <div className="trivy-hub">
+        <p role="status">Loading…</p>
+      </div>
+    );
   }
+
+  // Every number here comes from the documents already loaded above - runners, databases and
+  // defaults - rather than a field of its own in the settings model, so the summary line can
+  // never disagree with the tables and forms it sits above.
+  const unlinkedCount = runners.filter((runner) => !runner.database).length;
+  const allowedOverrides = new Set(defaults.allowOverrides ?? ALL_OVERRIDABLE_FIELDS);
+  const lockedCount = ALL_OVERRIDABLE_FIELDS.filter((field) => !allowedOverrides.has(field)).length;
 
   return (
     <div className="trivy-hub">
-      <div role="tablist">
-        <button role="tab" aria-selected={tab === 'runners'} onClick={() => setTab('runners')}>
+      <header className="trivy-topbar">
+        <h1 className="trivy-title">Trivy Scanner</h1>
+        <p className="trivy-summary">
+          <span className="trivy-stat">{pluralize(runners.length, 'runner')}</span>
+          <span className="trivy-stat">{pluralize(databases.length, 'database')}</span>
+          {/*
+           * The one number on this line that carries a warning colour when it is not zero: an
+           * unlinked runner is the migration state the build log is already warning about (see
+           * DefaultsForm's "moved to the Databases tab" note), so it is the one an administrator
+           * most needs to notice before reading any row.
+           */}
+          <span className={`trivy-stat${unlinkedCount > 0 ? ' trivy-stat-warn' : ''}`}>
+            {pluralize(unlinkedCount, 'runner')} unlinked
+          </span>
+          <span className="trivy-stat">{lockedCount}/10 policy fields locked</span>
+        </p>
+      </header>
+
+      <div role="tablist" className="trivy-tabs">
+        <button
+          role="tab"
+          className="trivy-tab"
+          aria-selected={tab === 'runners'}
+          onClick={() => setTab('runners')}
+        >
           Runners
         </button>
-        <button role="tab" aria-selected={tab === 'databases'} onClick={() => setTab('databases')}>
+        <button
+          role="tab"
+          className="trivy-tab"
+          aria-selected={tab === 'databases'}
+          onClick={() => setTab('databases')}
+        >
           Databases
         </button>
-        <button role="tab" aria-selected={tab === 'defaults'} onClick={() => setTab('defaults')}>
+        <button
+          role="tab"
+          className="trivy-tab"
+          aria-selected={tab === 'defaults'}
+          onClick={() => setTab('defaults')}
+        >
           Defaults
         </button>
-        <button role="tab" aria-selected={tab === 'policy'} onClick={() => setTab('policy')}>
+        <button
+          role="tab"
+          className="trivy-tab"
+          aria-selected={tab === 'policy'}
+          onClick={() => setTab('policy')}
+        >
           Policy
         </button>
       </div>
 
-      {savedMessage !== undefined ? <p>{savedMessage}</p> : null}
-      <IssueList issues={issues} />
-      {catalogWarning.length > 0 ? (
-        <div role="status" className="trivy-warning trivy-catalog-warning">
-          {catalogWarning.map((issue) => (
-            <div key={`${issue.field}:${issue.message}`}>
-              <strong>Warning:</strong> {issue.message}
-            </div>
-          ))}
-        </div>
-      ) : null}
+      <div className="trivy-panel">
+        {savedMessage !== undefined ? <p className="trivy-saved">{savedMessage}</p> : null}
+        <IssueList issues={issues} />
+        {catalogWarning.length > 0 ? (
+          <div role="status" className="trivy-warning trivy-catalog-warning">
+            {catalogWarning.map((issue) => (
+              <div key={`${issue.field}:${issue.message}`}>
+                <strong>Warning:</strong> {issue.message}
+              </div>
+            ))}
+          </div>
+        ) : null}
 
-      {tab === 'runners' ? (
-        editing !== undefined ? (
-          <RunnerForm
-            runner={editing === 'new' ? undefined : editing}
-            databases={databases}
-            onSave={(runner) => {
-              void handleSaveRunner(runner);
-            }}
-            onCancel={() => setEditing(undefined)}
-          />
-        ) : (
-          <>
-            <button type="button" onClick={() => setEditing('new')}>
-              Add runner
-            </button>
-            <RunnerTable
-              runners={runners}
-              onEdit={(runner) => setEditing(runner)}
-              onDelete={(runner) => {
-                void handleDeleteRunner(runner);
-              }}
-            />
-          </>
-        )
-      ) : null}
-
-      {tab === 'databases' ? (
-        editingDatabase !== undefined ? (
-          <DatabaseForm
-            database={editingDatabase === 'new' ? undefined : editingDatabase}
-            onSave={(database) => {
-              void handleSaveDatabase(database);
-            }}
-            onCancel={() => setEditingDatabase(undefined)}
-          />
-        ) : (
-          <>
-            <button type="button" onClick={() => setEditingDatabase('new')}>
-              Add database
-            </button>
-            <DatabaseTable
+        {tab === 'runners' ? (
+          editing !== undefined ? (
+            <RunnerForm
+              runner={editing === 'new' ? undefined : editing}
               databases={databases}
-              onEdit={(database) => setEditingDatabase(database)}
-              onDelete={(database) => {
-                void handleDeleteDatabase(database);
+              onSave={(runner) => {
+                void handleSaveRunner(runner);
               }}
+              onCancel={() => setEditing(undefined)}
             />
-          </>
-        )
-      ) : null}
+          ) : (
+            <>
+              <button type="button" onClick={() => setEditing('new')}>
+                Add runner
+              </button>
+              <RunnerTable
+                runners={runners}
+                onEdit={(runner) => setEditing(runner)}
+                onDelete={(runner) => {
+                  void handleDeleteRunner(runner);
+                }}
+              />
+            </>
+          )
+        ) : null}
 
-      {tab === 'defaults' ? (
-        <DefaultsForm
-          defaults={defaults}
-          onSave={(next) => {
-            void handleSaveDefaults(next);
-          }}
-        />
-      ) : null}
+        {tab === 'databases' ? (
+          editingDatabase !== undefined ? (
+            <DatabaseForm
+              database={editingDatabase === 'new' ? undefined : editingDatabase}
+              onSave={(database) => {
+                void handleSaveDatabase(database);
+              }}
+              onCancel={() => setEditingDatabase(undefined)}
+            />
+          ) : (
+            <>
+              <button type="button" onClick={() => setEditingDatabase('new')}>
+                Add database
+              </button>
+              <DatabaseTable
+                databases={databases}
+                onEdit={(database) => setEditingDatabase(database)}
+                onDelete={(database) => {
+                  void handleDeleteDatabase(database);
+                }}
+              />
+            </>
+          )
+        ) : null}
 
-      {tab === 'policy' ? (
-        <PolicyForm
-          defaults={defaults}
-          onSave={(next) => {
-            void handleSaveDefaults(next);
-          }}
-        />
-      ) : null}
+        {tab === 'defaults' ? (
+          <DefaultsForm
+            defaults={defaults}
+            onSave={(next) => {
+              void handleSaveDefaults(next);
+            }}
+          />
+        ) : null}
+
+        {tab === 'policy' ? (
+          <PolicyForm
+            defaults={defaults}
+            onSave={(next) => {
+              void handleSaveDefaults(next);
+            }}
+          />
+        ) : null}
+      </div>
     </div>
   );
 }

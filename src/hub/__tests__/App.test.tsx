@@ -278,6 +278,76 @@ describe('App', () => {
     expect(values).toEqual(['', 'official']);
   });
 
+  // --- Summary line ---
+
+  it('summarizes runner, database and unlinked counts, and how many policy fields are locked', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+      { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: true },
+    ];
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    // No allowOverrides at all means every one of the ten fields is allowed, so none are locked.
+    store.defaults = { dbRepository: '' };
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+
+    expect(screen.getByText(/^2 runners$/)).toBeTruthy();
+    expect(screen.getByText(/^1 database$/)).toBeTruthy();
+    // Neither runner names a database, so both are unlinked.
+    expect(screen.getByText(/2 runners unlinked/)).toBeTruthy();
+    expect(screen.getByText(/0\/10 policy fields locked/)).toBeTruthy();
+  });
+
+  it('shows zero unlinked runners once every runner names a database, without warning styling', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      {
+        alias: 'baseline',
+        image: 'registry.example.com/trivy:0.58.1',
+        isDefault: true,
+        enabled: true,
+        database: 'official',
+      },
+    ];
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+
+    const unlinkedStat = screen.getByText(/0 runners unlinked/);
+    expect(unlinkedStat).toBeTruthy();
+    expect(unlinkedStat.className).not.toMatch(/warn/i);
+  });
+
+  it('marks the unlinked count with a warning style when it is not zero', async () => {
+    const store = new FakeStore();
+    // store.runners already has one runner with no `database` set.
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+
+    const unlinkedStat = screen.getByText(/1 runner unlinked/);
+    expect(unlinkedStat.className).toMatch(/warn/i);
+  });
+
+  it('counts locked policy fields from an explicit allowOverrides list', async () => {
+    const store = new FakeStore();
+    store.defaults = { dbRepository: '', allowOverrides: ['severities', 'failOn'] };
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+
+    // Ten overridable fields total, two allowed, so eight are locked.
+    expect(screen.getByText(/8\/10 policy fields locked/)).toBeTruthy();
+  });
+
+  it('counts every policy field as locked when allowOverrides is an explicit empty list', async () => {
+    const store = new FakeStore();
+    store.defaults = { dbRepository: '', allowOverrides: [] };
+    render(<App store={store} />);
+    await screen.findByText('baseline');
+
+    expect(screen.getByText(/10\/10 policy fields locked/)).toBeTruthy();
+  });
+
   it('saves the database selected on the runner form', async () => {
     const store = new FakeStore();
     store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];

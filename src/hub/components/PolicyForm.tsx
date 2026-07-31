@@ -21,7 +21,12 @@ const OVERRIDABLE_FIELD_LABELS = {
   ignoreFile: 'Which .trivyignore file is used to suppress findings.',
 } satisfies Record<OverridableField, string>;
 
-const ALL_OVERRIDABLE_FIELDS = Object.keys(OVERRIDABLE_FIELD_LABELS) as OverridableField[];
+/**
+ * Exported so the shell (App.tsx) can derive "how many of the ten policy fields are locked" for
+ * its summary line from the same list this form checks off, instead of a second hand-maintained
+ * count that could silently drift from it.
+ */
+export const ALL_OVERRIDABLE_FIELDS = Object.keys(OVERRIDABLE_FIELD_LABELS) as OverridableField[];
 
 export interface PolicyFormProps {
   defaults: DefaultsConfig;

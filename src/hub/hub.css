@@ -1,10 +1,202 @@
-/* Minimal styling to feel at home in Azure DevOps. This is dressing, not a design system. */
+/*
+ * Trivy Scanner admin hub - operations console styling.
+ *
+ * Two theme token sets (dark, light), switched by `data-theme="dark"|"light"` on the document
+ * root - stamped at runtime by theme.ts/hub.tsx from the host's actual rendered colour, never by
+ * the host's own CSS variable names (see theme.ts's top-level comment for why: that set differs
+ * between the cloud service and an on-premises server, and referencing a missing one here would
+ * degrade this entire page to unstyled browser defaults instead of just failing detection).
+ *
+ * Everything below is styled through the --hub-* tokens only.
+ */
+
+:root[data-theme='dark'] {
+  --hub-bg: #15181d;
+  --hub-surface: #1c2027;
+  --hub-line: #2a2f38;
+  --hub-fg: #e9ecf1;
+  --hub-dim: #98a0ad;
+  --hub-accent: #00c2b2;
+  --hub-azure: #3b9dea;
+  --hub-warn: #f0b429;
+  --hub-critical: #ff6b6b;
+  --hub-ok: #4ec97a;
+}
+
+:root[data-theme='light'] {
+  --hub-bg: #ffffff;
+  --hub-surface: #f8f8f7;
+  --hub-line: #e1dfdd;
+  --hub-fg: #1f2328;
+  --hub-dim: #5c6169;
+  --hub-accent: #0b7b70;
+  --hub-azure: #0f6fc4;
+  --hub-warn: #8a6100;
+  --hub-critical: #a4262c;
+  --hub-ok: #0e700e;
+}
+
+/*
+ * Covers the moment between first paint and hub.tsx deciding a theme (and the rare case where
+ * detection cannot run at all, e.g. this stylesheet loaded outside the hub). Light is the safe
+ * default: the same fallback theme.ts reaches for when neither the host nor prefers-color-scheme
+ * gives it an answer.
+ */
+:root:not([data-theme]) {
+  --hub-bg: #ffffff;
+  --hub-surface: #f8f8f7;
+  --hub-line: #e1dfdd;
+  --hub-fg: #1f2328;
+  --hub-dim: #5c6169;
+  --hub-accent: #0b7b70;
+  --hub-azure: #0f6fc4;
+  --hub-warn: #8a6100;
+  --hub-critical: #a4262c;
+  --hub-ok: #0e700e;
+}
+
+html,
+body {
+  height: 100%;
+}
 
 body {
+  margin: 0;
+  background: var(--hub-bg);
+  color: var(--hub-fg);
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   font-size: 13px;
-  color: #171717;
-  margin: 16px;
+  line-height: 1.4;
+}
+
+#root {
+  min-height: 100%;
+}
+
+.trivy-hub {
+  padding: 16px 20px 24px;
+  max-width: 960px;
+}
+
+/* Machine identifiers - aliases, image references, repository references - in monospace: a
+   misread tag is the whole failure mode these tables and forms exist to prevent. Targeted
+   structurally (by column position) rather than by adding classes inside RunnerTable /
+   DatabaseTable / RunnerForm / DatabaseForm, none of which this part of the work touches. */
+.trivy-runner-table td:nth-child(1),
+.trivy-runner-table td:nth-child(2),
+.trivy-database-table td:nth-child(1),
+.trivy-database-table td:nth-child(2),
+.trivy-runner-form label:nth-of-type(1) input,
+.trivy-runner-form label:nth-of-type(2) input,
+.trivy-database-form label:nth-of-type(1) input,
+.trivy-database-form label:nth-of-type(2) input {
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+/* --- Top bar --- */
+
+.trivy-topbar {
+  padding-bottom: 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--hub-line);
+}
+
+.trivy-title {
+  margin: 0 0 6px;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+/*
+ * The summary line: is anything wrong, before any row is read. Counts get tabular-nums so the
+ * digits line up as they change; the separator between stats is a generated character, so it is
+ * invisible to text queries and to a screen reader (an operations console, not a design
+ * showpiece).
+ */
+.trivy-summary {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 0;
+  color: var(--hub-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.trivy-stat {
+  padding: 0 10px;
+}
+
+.trivy-stat:first-child {
+  padding-left: 0;
+}
+
+.trivy-stat + .trivy-stat {
+  border-left: 1px solid var(--hub-line);
+}
+
+/*
+ * The one count that carries a warning colour when it is not zero: an unlinked runner is the
+ * migration state the build log already warns about. State is encoded in shape as well as
+ * colour - a leading triangle, not colour alone - so it still reads correctly for a viewer who
+ * cannot distinguish the colour.
+ */
+.trivy-stat-warn {
+  color: var(--hub-warn);
+  font-weight: 600;
+}
+
+.trivy-stat-warn::before {
+  content: '\25B2 ';
+}
+
+/* --- Tab strip --- */
+
+.trivy-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--hub-line);
+  margin-bottom: 16px;
+}
+
+.trivy-tab {
+  appearance: none;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 8px 12px;
+  color: var(--hub-dim);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.trivy-tab:hover {
+  color: var(--hub-fg);
+}
+
+.trivy-tab:focus-visible {
+  outline: 2px solid var(--hub-azure);
+  outline-offset: -2px;
+}
+
+.trivy-tab[aria-selected='true'] {
+  color: var(--hub-fg);
+  border-bottom-color: var(--hub-accent);
+}
+
+/* --- Panel: the existing tab contents, rendered unchanged inside this frame --- */
+
+.trivy-panel {
+  background: var(--hub-surface);
+  border: 1px solid var(--hub-line);
+  border-radius: 4px;
+  padding: 16px;
+}
+
+.trivy-saved {
+  color: var(--hub-ok);
+  font-weight: 600;
 }
 
 table {
@@ -16,7 +208,12 @@ th,
 td {
   text-align: left;
   padding: 6px 8px;
-  border-bottom: 1px solid #e1e1e1;
+  border-bottom: 1px solid var(--hub-line);
+}
+
+th {
+  color: var(--hub-dim);
+  font-weight: 600;
 }
 
 label {
@@ -30,12 +227,51 @@ label select {
   display: block;
   width: 100%;
   margin-top: 4px;
+  box-sizing: border-box;
+  background: var(--hub-bg);
+  color: var(--hub-fg);
+  border: 1px solid var(--hub-line);
+  border-radius: 3px;
+  padding: 5px 7px;
+  font: inherit;
 }
 
+label input[type='checkbox'] {
+  display: inline-block;
+  width: auto;
+  margin: 0 6px 0 0;
+  vertical-align: middle;
+}
+
+button {
+  font: inherit;
+}
+
+/*
+ * Findings/state colours, encoded in shape as well as colour where they mark a blocking problem
+ * (role="alert") versus a non-blocking one (role="status"): the alert gets a solid left border,
+ * the status a dashed one, so the two do not read the same to a viewer who cannot tell red from
+ * grey apart.
+ */
 .trivy-issues {
-  color: #a80000;
+  color: var(--hub-critical);
+  border-left: 3px solid var(--hub-critical);
+  padding: 8px 10px;
+  margin: 0 0 12px;
+  background: var(--hub-bg);
+}
+
+.trivy-load-error {
+  margin: 20px;
 }
 
 .trivy-warning {
-  color: #616161;
+  color: var(--hub-warn);
+}
+
+.trivy-catalog-warning {
+  border-left: 3px dashed var(--hub-warn);
+  padding: 8px 10px;
+  margin: 0 0 12px;
+  background: var(--hub-bg);
 }
