@@ -3,12 +3,23 @@
  * hub inside an iframe in whichever one the signed-in user picked; getting this wrong means a
  * dark panel sitting inside a white page, or vice versa.
  *
- * This module deliberately never builds anything on the *host's* CSS variable names: their set
- * differs between the cloud service and an on-premises server, and a missing one would silently
- * degrade our entire palette to unstyled browser defaults (see hub.css's own tokens for the
- * palette itself, which is plain hardcoded colour, never `var(--something-the-host-defined)`).
- * The only thing this module borrows from the host is a single rendered colour, purely to decide
- * which of *our own* two token sets to switch on.
+ * hub.css's palette stays plain hardcoded colour under our own `--hub-*` names, never
+ * `var(--something-the-host-defined)`: the host's variable set differs between the cloud service
+ * and an on-premises server, and referencing a missing one would silently degrade the whole page
+ * to unstyled browser defaults. The host's variables are read *here*, and only here, purely to
+ * decide which of our own two token sets to switch on.
+ *
+ * Reading them is a direct question with an unambiguous answer:
+ * `getComputedStyle(root).getPropertyValue('--text-primary-color')` is `""` when nobody set it,
+ * and the host's value when someone did - whether the host set it through a stylesheet (which is
+ * what `azure-devops-extension-sdk`'s `applyTheme()` does: it injects
+ * `:root { --<key>: <value>; ... } body { color: var(--text-primary-color) }` into `<head>`) or
+ * inline on the root element. That is unlike an ordinary property such as `color`, where "the
+ * host set black" and "nobody set anything and black is the browser default" compute identically;
+ * v0.6.0 worked around that by sniffing `<head>` for a `<style>` mentioning
+ * `--text-primary-color` and then reading `getComputedStyle(body)` - which read back the hub's own
+ * `body { background: var(--hub-bg) }` and concluded, from its own light default, that the host
+ * was light. A custom property has no such ambiguity and needs no sniffing.
  */
 
 export interface RGB {
@@ -105,66 +116,88 @@ function hasPaint(value: string | undefined | null): value is string {
 }
 
 /**
- * Whether `azure-devops-extension-sdk`'s theme handshake actually ran in this document. Reading
- * `getComputedStyle` alone cannot tell "the host set --text-primary-color to black" apart from
- * "nothing was ever set and the browser's own default body text is black" - both compute to the
- * same value - so this checks for the one thing that is unambiguous: the `<style>` element the
- * SDK's `applyTheme()` injects (confirmed by reading the shipped `SDK.js`; see this module's
- * top-level doc comment and hub.tsx for the corresponding note on the SDK's *typings* not
- * covering this).
+ * Reads one CSS custom property, returning `""` when it is not set. The whole host-facing surface
+ * of this module is this one function type, so the decision below stays a pure function that can
+ * be tested without a browser - which matters because jsdom computes no custom properties at all
+ * and would otherwise leave the entire host branch untestable.
  */
-function hostThemeWasApplied(): boolean {
-  if (typeof document === 'undefined') {
-    return false;
-  }
-  return Array.from(document.getElementsByTagName('style')).some((style) =>
-    (style.textContent ?? '').includes('--text-primary-color'),
-  );
-}
+export type HostVariableReader = (name: string) => string;
 
-interface HostSignal {
-  color: string;
-  /**
-   * True when `color` is a foreground colour rather than a background: a light theme's body
-   * text is dark and a dark theme's is light, so the theme decided from a foreground colour is
-   * the mirror image of the one decided from an actual background.
-   */
-  invert: boolean;
+/**
+ * The host's page background. Opportunistic: it is a real Azure DevOps theme key, but nothing in
+ * the SDK guarantees any particular key is present, so this is tried first and simply skipped
+ * when the host did not send it.
+ */
+export const HOST_BACKGROUND_VARIABLE = '--background-color';
+
+/**
+ * The host's primary text colour - the one key `azure-devops-extension-sdk` itself depends on
+ * (its injected rule is literally `body { color: var(--text-primary-color) }`), so if the host
+ * sent theme data at all, this is the key most likely to be in it.
+ */
+export const HOST_FOREGROUND_VARIABLE = '--text-primary-color';
+
+/**
+ * The real reader: the document root's computed custom properties. This sees the value whether
+ * the host declared it in a stylesheet (`:root { --text-primary-color: ... }`, which is what the
+ * SDK injects) or set it inline on `<html>`, and returns `""` when nothing set it.
+ */
+export function readHostVariable(name: string): string {
+  if (typeof document === 'undefined' || !document.documentElement) {
+    return '';
+  }
+  if (typeof getComputedStyle !== 'function') {
+    return '';
+  }
+  return getComputedStyle(document.documentElement).getPropertyValue(name);
 }
 
 /**
- * Reads whatever the host actually painted, if anything. Prefers an actual rendered background
- * should one ever appear (some future SDK version, or a host that goes beyond what
- * `azure-devops-extension-sdk` does today); falls back to the one rule the SDK's `applyTheme()`
- * is confirmed to apply unconditionally today, `body { color: var(--text-primary-color) }`.
- * Returns undefined when neither is actually painted - including, deliberately, every run under
- * jsdom, which does not resolve CSS custom properties at all (`var(...)` always computes to
- * `""`), and every real browser session where the host never sent theme data.
+ * `themeFromColor` with the two things a *host* colour needs on top of it.
+ *
+ * `invert` is for a foreground: a light theme's text is dark and a dark theme's is light, so the
+ * theme read off a foreground is the mirror image of the one read off a background.
+ *
+ * The unparseable case is checked before inverting, on purpose. `themeFromColor` answers light
+ * for a colour it cannot parse - the same safe default as no signal at all - and inverting that
+ * would turn "no idea" into a confident dark.
  */
-function resolveHostSignal(): HostSignal | undefined {
-  if (!hostThemeWasApplied() || typeof document === 'undefined' || !document.body) {
-    return undefined;
+function themeFromHostColor(color: string, invert: boolean): 'light' | 'dark' {
+  if (!parseColor(color)) {
+    return 'light';
   }
-  const bodyStyle = getComputedStyle(document.body);
-  if (hasPaint(bodyStyle.backgroundColor)) {
-    return { color: bodyStyle.backgroundColor, invert: false };
+  const decided = themeFromColor(color);
+  if (!invert) {
+    return decided;
   }
-  if (hasPaint(bodyStyle.color)) {
-    return { color: bodyStyle.color, invert: true };
+  return decided === 'dark' ? 'light' : 'dark';
+}
+
+/**
+ * The host's answer, if it gave one: its background variable when set, else its foreground
+ * variable read inverted, else undefined for "the host said nothing" - which is every session
+ * where the host sent no theme data, and every run under jsdom with the real reader.
+ */
+export function themeFromHostVariables(read: HostVariableReader): 'light' | 'dark' | undefined {
+  const background = read(HOST_BACKGROUND_VARIABLE);
+  if (hasPaint(background)) {
+    return themeFromHostColor(background, false);
+  }
+  const foreground = read(HOST_FOREGROUND_VARIABLE);
+  if (hasPaint(foreground)) {
+    return themeFromHostColor(foreground, true);
   }
   return undefined;
 }
 
 /**
- * Decides which theme is active: the host's own rendered colour if one was actually painted,
- * else `prefers-color-scheme`, else light - the same three-step fallback described in the plan
- * this module implements.
+ * Decides which theme is active: the host's own variables if it set any, else
+ * `prefers-color-scheme`, else light.
  */
-export function detectTheme(): 'light' | 'dark' {
-  const signal = resolveHostSignal();
-  if (signal) {
-    const decided = themeFromColor(signal.color);
-    return signal.invert ? (decided === 'dark' ? 'light' : 'dark') : decided;
+export function detectTheme(read: HostVariableReader = readHostVariable): 'light' | 'dark' {
+  const fromHost = themeFromHostVariables(read);
+  if (fromHost) {
+    return fromHost;
   }
   if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
     return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
@@ -173,8 +206,11 @@ export function detectTheme(): 'light' | 'dark' {
 }
 
 /** Decides the theme and stamps it onto `root` (the document root by default) as `data-theme`. */
-export function applyDetectedTheme(root: HTMLElement = document.documentElement): 'light' | 'dark' {
-  const theme = detectTheme();
+export function applyDetectedTheme(
+  root: HTMLElement = document.documentElement,
+  read: HostVariableReader = readHostVariable,
+): 'light' | 'dark' {
+  const theme = detectTheme(read);
   root.setAttribute('data-theme', theme);
   return theme;
 }

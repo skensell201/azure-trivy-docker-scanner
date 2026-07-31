@@ -2,10 +2,11 @@
  * Trivy Scanner admin hub - operations console styling.
  *
  * Two theme token sets (dark, light), switched by `data-theme="dark"|"light"` on the document
- * root - stamped at runtime by theme.ts/hub.tsx from the host's actual rendered colour, never by
- * the host's own CSS variable names (see theme.ts's top-level comment for why: that set differs
- * between the cloud service and an on-premises server, and referencing a missing one here would
- * degrade this entire page to unstyled browser defaults instead of just failing detection).
+ * root - stamped at runtime by theme.ts/hub.tsx, which reads the host's own theme variables only
+ * to pick between the two. No selector below ever names one (see theme.ts's top-level comment for
+ * why: that set differs between the cloud service and an on-premises server, and referencing a
+ * missing one here would degrade this entire page to unstyled browser defaults instead of just
+ * failing detection).
  *
  * Everything below is styled through the --hub-* tokens only.
  */
@@ -60,10 +61,16 @@ body {
   height: 100%;
 }
 
+/*
+ * `body` gets everything except a colour. The host owns `body`'s colour and we cannot outbid it:
+ * `azure-devops-extension-sdk`'s `applyTheme()` injects `body { color: var(--text-primary-color) }`
+ * into `<head>` at runtime - same selector, same specificity, injected after this stylesheet, so
+ * it wins, and in v0.6.0 every element that did not set a colour of its own inherited the host's
+ * white text onto our white card. The background stays here: the host paints none.
+ */
 body {
   margin: 0;
   background: var(--hub-bg);
-  color: var(--hub-fg);
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   font-size: 13px;
   line-height: 1.4;
@@ -76,6 +83,21 @@ body {
    * containers is missed.
    */
   overflow-x: hidden;
+}
+
+/*
+ * The hub's foreground lives here instead, on the element this bundle actually renders into (see
+ * hub.html and hub.tsx). A rule on `#root` beats anything inherited from `body`, whoever wrote it
+ * and whenever they injected it, so everything the hub renders inherits our token rather than the
+ * host's - the property src/hub/__tests__/themeIsolation.test.tsx exists to hold.
+ *
+ * `.trivy-hub` carries it too: it is App's own outermost element, and stating it there as well
+ * keeps the hub self-coloured even when it is mounted somewhere that is not `#root` (every test
+ * in this suite, for one).
+ */
+#root,
+.trivy-hub {
+  color: var(--hub-fg);
 }
 
 #root {
