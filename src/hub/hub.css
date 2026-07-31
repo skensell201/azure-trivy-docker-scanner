@@ -67,6 +67,15 @@ body {
   font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
   font-size: 13px;
   line-height: 1.4;
+  /*
+   * The list/detail split below is the one part of this page with enough independent moving
+   * parts (a fixed-width list column, a flexible pane, long monospace repository strings) that
+   * something could in principle push the layout wider than the viewport. Wide content gets its
+   * own scroll container (see `.trivy-row-mono` and `.trivy-scroll-x` below); this is the
+   * backstop that keeps the page itself from ever growing a sideways scrollbar if one of those
+   * containers is missed.
+   */
+  overflow-x: hidden;
 }
 
 #root {
@@ -75,21 +84,15 @@ body {
 
 .trivy-hub {
   padding: 16px 20px 24px;
-  max-width: 960px;
+  max-width: 1100px;
 }
 
 /* Machine identifiers - aliases, image references, repository references - in monospace: a
-   misread tag is the whole failure mode these tables and forms exist to prevent. Targeted
-   structurally (by column position) rather than by adding classes inside RunnerTable /
-   DatabaseTable / RunnerForm / DatabaseForm, none of which this part of the work touches. */
-.trivy-runner-table td:nth-child(1),
-.trivy-runner-table td:nth-child(2),
-.trivy-database-table td:nth-child(1),
-.trivy-database-table td:nth-child(2),
-.trivy-runner-form label:nth-of-type(1) input,
-.trivy-runner-form label:nth-of-type(2) input,
-.trivy-database-form label:nth-of-type(1) input,
-.trivy-database-form label:nth-of-type(2) input {
+   misread tag is the whole failure mode these lists and forms exist to prevent. Targeted by a
+   real class name on the element itself (RunnerList/DatabaseList/RunnerForm/DatabaseForm all set
+   it directly), not by column/child position: a structural selector silently stops matching the
+   moment a row or field is reordered, and nothing here would tell you it broke. */
+.trivy-mono {
   font-family: 'Cascadia Mono', Consolas, ui-monospace, 'SFMono-Regular', Menlo, monospace;
 }
 
@@ -245,6 +248,281 @@ label input[type='checkbox'] {
 
 button {
   font: inherit;
+}
+
+/*
+ * Field-level validation: a message directly under the field it concerns, instead of only in a
+ * bottom-of-form block - see RunnerForm/DatabaseForm/RegistryCredentialFields. `.trivy-field`
+ * wraps a single label+input pair so the error has somewhere fixed to sit regardless of which
+ * field it belongs to.
+ */
+.trivy-field {
+  margin-bottom: 10px;
+}
+
+.trivy-field label {
+  margin-bottom: 0;
+}
+
+.trivy-field-error {
+  margin: 4px 0 0;
+  color: var(--hub-critical);
+  font-weight: 600;
+}
+
+/* --- Operations console: list on the left, detail pane on the right --- */
+
+.trivy-split {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.trivy-list-pane {
+  flex: 0 0 300px;
+  min-width: 0;
+}
+
+.trivy-detail-pane {
+  flex: 1 1 auto;
+  min-width: 0;
+  border-left: 1px solid var(--hub-line);
+  padding-left: 16px;
+}
+
+.trivy-detail-title {
+  margin: 0 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.trivy-detail-empty {
+  color: var(--hub-dim);
+}
+
+/* Below this width there is not enough room for two side-by-side columns; the list moves above
+   the pane instead, each taking the page's full width. */
+@media (max-width: 720px) {
+  .trivy-split {
+    flex-direction: column;
+  }
+
+  .trivy-list-pane {
+    flex: none;
+    width: 100%;
+  }
+
+  .trivy-detail-pane {
+    width: 100%;
+    border-left: none;
+    border-top: 1px solid var(--hub-line);
+    padding-left: 0;
+    padding-top: 16px;
+  }
+}
+
+.trivy-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  border: 1px solid var(--hub-line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.trivy-row {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.trivy-row + .trivy-row {
+  border-top: 1px solid var(--hub-line);
+}
+
+/*
+ * The state stripe down the row's left edge. Solid marks the row's ordinary state; dashed marks
+ * the one state worth a second look before opening anything (a runner with no database, falling
+ * back to the deprecated Defaults tab settings) - same solid/dashed convention as the
+ * alert/status split below, so a viewer who cannot tell the colours apart still gets the
+ * distinction from the stripe's pattern alone.
+ */
+.trivy-row-stripe {
+  flex: 0 0 4px;
+  border-left: 4px solid transparent;
+}
+
+.trivy-row-stripe-ok {
+  border-left-color: var(--hub-ok);
+}
+
+.trivy-row-stripe-warn {
+  border-left-style: dashed;
+  border-left-color: var(--hub-warn);
+}
+
+.trivy-row-stripe-dim {
+  border-left-color: var(--hub-dim);
+}
+
+.trivy-row-selected {
+  background: var(--hub-bg);
+}
+
+.trivy-row-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 8px 10px;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.trivy-row-main:hover {
+  background: var(--hub-bg);
+}
+
+.trivy-row-main:focus-visible {
+  outline: 2px solid var(--hub-azure);
+  outline-offset: -2px;
+}
+
+.trivy-row-alias {
+  font-weight: 600;
+}
+
+/* The image/repository line: monospace, and independently horizontally scrollable so a long
+   reference cannot widen the row - and so the page - past the viewport. */
+.trivy-row-mono {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: nowrap;
+  color: var(--hub-dim);
+  font-size: 12px;
+}
+
+.trivy-row-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.trivy-row-delete {
+  flex: 0 0 auto;
+  align-self: center;
+  margin-right: 8px;
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--hub-line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  color: var(--hub-dim);
+  cursor: pointer;
+}
+
+.trivy-row-delete:hover {
+  color: var(--hub-critical);
+  border-color: var(--hub-critical);
+}
+
+.trivy-row-delete:focus-visible {
+  outline: 2px solid var(--hub-azure);
+  outline-offset: -2px;
+}
+
+/*
+ * Chips: state as text, colour, and a leading glyph unique to each meaning - so "Default",
+ * "Disabled" and the database-link/warning pair still read apart from one another for a viewer
+ * who cannot rely on colour. The warning chip's triangle matches `.trivy-stat-warn` above: the
+ * same shape means the same thing everywhere on this page.
+ */
+.trivy-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--hub-line);
+  border-radius: 999px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.trivy-chip-default {
+  border-color: var(--hub-accent);
+  color: var(--hub-accent);
+}
+
+.trivy-chip-default::before {
+  content: '\2605\a0';
+}
+
+.trivy-chip-disabled {
+  border-style: dashed;
+  color: var(--hub-dim);
+  text-decoration: line-through;
+}
+
+.trivy-chip-disabled::before {
+  content: '\23F8\a0';
+  text-decoration: none;
+}
+
+.trivy-chip-db {
+  border-color: var(--hub-ok);
+  color: var(--hub-ok);
+  font-family: 'Cascadia Mono', Consolas, ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+.trivy-chip-db::before {
+  content: '\2192\a0';
+  font-family: inherit;
+}
+
+.trivy-chip-dbwarn {
+  border-style: dashed;
+  border-color: var(--hub-warn);
+  color: var(--hub-warn);
+}
+
+.trivy-chip-dbwarn::before {
+  content: '\25B2\a0';
+}
+
+/* A horizontal scroll container of last resort for any other wide content (long argument
+   strings, etc.): scrolls its own contents rather than the page. */
+.trivy-scroll-x {
+  overflow-x: auto;
+}
+
+/* --- Policy form: the three gate-defeating fields grouped apart from the rest --- */
+
+.trivy-policy-group {
+  border: 1px solid var(--hub-line);
+  border-radius: 4px;
+  padding: 4px 12px 12px;
+  margin: 0 0 16px;
+}
+
+.trivy-policy-group legend {
+  padding: 0 6px;
+  color: var(--hub-dim);
+  font-weight: 600;
+}
+
+.trivy-policy-group-critical {
+  border-color: var(--hub-warn);
+}
+
+.trivy-policy-group-critical legend {
+  color: var(--hub-warn);
 }
 
 /*

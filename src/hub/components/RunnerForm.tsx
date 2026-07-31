@@ -74,16 +74,41 @@ export function RunnerForm({ runner, databases, onSave, onCancel }: RunnerFormPr
     }
   };
 
+  // `validateRunner` names every issue it can produce by one of these fields, so each has a
+  // dedicated spot in the pane, right next to the input it concerns, phrased as the fix rather
+  // than the rule (see the field's own message text in shared/validation.ts). `knownFields`
+  // exists only so `otherIssues` below can catch anything that is not attributable to a single
+  // field - there is none today, but a future validateRunner field the pane forgot to wire up
+  // fails safely into the fallback list instead of silently vanishing.
+  const knownFields = ['alias', 'image', 'registryUsername', 'registryPassword', 'extraDockerArgs'];
+  const errorFor = (field: string): string | undefined =>
+    issues.find((issue) => issue.field === field)?.message;
+  const otherIssues = issues.filter((issue) => !knownFields.includes(issue.field));
+
   return (
     <div className="trivy-runner-form">
-      <label>
-        Alias
-        <input value={alias} onChange={(event) => setAlias(event.target.value)} />
-      </label>
-      <label>
-        Image
-        <input value={image} onChange={(event) => setImage(event.target.value)} />
-      </label>
+      <div className="trivy-field">
+        <label>
+          Alias
+          <input className="trivy-mono" value={alias} onChange={(event) => setAlias(event.target.value)} />
+        </label>
+        {errorFor('alias') ? (
+          <p role="alert" className="trivy-field-error">
+            {errorFor('alias')}
+          </p>
+        ) : null}
+      </div>
+      <div className="trivy-field">
+        <label>
+          Image
+          <input className="trivy-mono" value={image} onChange={(event) => setImage(event.target.value)} />
+        </label>
+        {errorFor('image') ? (
+          <p role="alert" className="trivy-field-error">
+            {errorFor('image')}
+          </p>
+        ) : null}
+      </div>
       <label>
         Display name
         <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
@@ -92,13 +117,20 @@ export function RunnerForm({ runner, databases, onSave, onCancel }: RunnerFormPr
         Description
         <input value={description} onChange={(event) => setDescription(event.target.value)} />
       </label>
-      <label>
-        Extra docker args
-        <input
-          value={extraDockerArgs}
-          onChange={(event) => setExtraDockerArgs(event.target.value)}
-        />
-      </label>
+      <div className="trivy-field">
+        <label>
+          Extra docker args
+          <input
+            value={extraDockerArgs}
+            onChange={(event) => setExtraDockerArgs(event.target.value)}
+          />
+        </label>
+        {errorFor('extraDockerArgs') ? (
+          <p role="alert" className="trivy-field-error">
+            {errorFor('extraDockerArgs')}
+          </p>
+        ) : null}
+      </div>
       <label>
         Database
         <select value={database} onChange={(event) => setDatabase(event.target.value)}>
@@ -125,6 +157,8 @@ export function RunnerForm({ runner, databases, onSave, onCancel }: RunnerFormPr
         newPassword={newPassword}
         onNewPasswordChange={setNewPassword}
         warningText="The registry password is stored in clear text in the extension settings document. Anyone with read access to this collection's extension data can read it."
+        usernameError={errorFor('registryUsername')}
+        passwordError={errorFor('registryPassword')}
       />
 
       <label>
@@ -144,7 +178,7 @@ export function RunnerForm({ runner, databases, onSave, onCancel }: RunnerFormPr
         />
       </label>
 
-      <IssueList issues={issues} />
+      <IssueList issues={otherIssues} />
 
       <button type="button" onClick={submit}>
         Save

@@ -363,4 +363,81 @@ describe('App', () => {
     await waitFor(() => expect(store.saveRunners).toHaveBeenCalled());
     expect(store.savedRunners[0][1]).toMatchObject({ database: 'official' });
   });
+
+  // --- Operations console: list on the left, detail pane on the right ---
+
+  it('opens the selected runner in the detail pane, prefilled with its own values', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+      { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: true },
+    ];
+    render(<App store={store} />);
+    await screen.findByText('legacy');
+    await userEvent.click(screen.getByRole('button', { name: /edit legacy/i }));
+    expect((screen.getByLabelText('Alias') as HTMLInputElement).value).toBe('legacy');
+    expect((screen.getByLabelText('Image') as HTMLInputElement).value).toBe(
+      'registry.example.com/trivy:0.44.0',
+    );
+  });
+
+  it('keeps the runner list visible while the detail pane is open', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+      { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: true },
+    ];
+    render(<App store={store} />);
+    await screen.findByText('legacy');
+    await userEvent.click(screen.getByRole('button', { name: /edit legacy/i }));
+    // The pane is open (its own fields are visible)...
+    expect(screen.getByLabelText('Alias')).toBeTruthy();
+    // ...and the list, including the row not being edited, is still on screen.
+    expect(screen.getByText('baseline')).toBeTruthy();
+    expect(screen.getByText('legacy')).toBeTruthy();
+  });
+
+  it('saves an edit made in the pane as part of the whole catalog, leaving the other runner untouched', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      { alias: 'baseline', image: 'registry.example.com/trivy:0.58.1', isDefault: true, enabled: true },
+      { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: true },
+    ];
+    render(<App store={store} />);
+    await screen.findByText('legacy');
+    await userEvent.click(screen.getByRole('button', { name: /edit legacy/i }));
+    await userEvent.clear(screen.getByLabelText('Image'));
+    await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy:0.50.0');
+    await act(async () => {
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+    });
+    await waitFor(() => expect(store.saveRunners).toHaveBeenCalled());
+    expect(store.savedRunners[0]).toEqual([
+      store.runners[0],
+      expect.objectContaining({ alias: 'legacy', image: 'registry.example.com/trivy:0.50.0' }),
+    ]);
+  });
+
+  it('shows the deprecated-Defaults warning chip for an unlinked runner, and the database alias for a linked one, in the list itself', async () => {
+    const store = new FakeStore();
+    store.runners = [
+      {
+        alias: 'baseline',
+        image: 'registry.example.com/trivy:0.58.1',
+        isDefault: true,
+        enabled: true,
+        database: 'official',
+      },
+      { alias: 'legacy', image: 'registry.example.com/trivy:0.44.0', enabled: true },
+    ];
+    store.databases = [{ alias: 'official', repository: 'registry.example.com/trivy-db:2' }];
+    render(<App store={store} />);
+    await screen.findByText('legacy');
+
+    const linkedRow = screen.getByText('baseline').closest('li');
+    expect(linkedRow?.textContent).toMatch(/official/);
+
+    const unlinkedRow = screen.getByText('legacy').closest('li');
+    expect(unlinkedRow?.textContent).toMatch(/deprecated Defaults settings/i);
+  });
 });

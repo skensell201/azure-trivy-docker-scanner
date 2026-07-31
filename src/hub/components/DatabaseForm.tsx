@@ -61,20 +61,57 @@ export function DatabaseForm({ database, onSave, onCancel }: DatabaseFormProps):
     }
   };
 
+  // Same convention as RunnerForm: every field validateDatabase can name gets its own spot next
+  // to the input, and `otherIssues` is a safety net for anything that is not attributable to a
+  // single field (none today).
+  const knownFields = ['alias', 'repository', 'javaRepository', 'registryUsername', 'registryPassword'];
+  const errorFor = (field: string): string | undefined =>
+    issues.find((issue) => issue.field === field)?.message;
+  const otherIssues = issues.filter((issue) => !knownFields.includes(issue.field));
+
   return (
     <div className="trivy-database-form">
-      <label>
-        Alias
-        <input value={alias} onChange={(event) => setAlias(event.target.value)} />
-      </label>
-      <label>
-        Repository
-        <input value={repository} onChange={(event) => setRepository(event.target.value)} />
-      </label>
-      <label>
-        Java repository
-        <input value={javaRepository} onChange={(event) => setJavaRepository(event.target.value)} />
-      </label>
+      <div className="trivy-field">
+        <label>
+          Alias
+          <input className="trivy-mono" value={alias} onChange={(event) => setAlias(event.target.value)} />
+        </label>
+        {errorFor('alias') ? (
+          <p role="alert" className="trivy-field-error">
+            {errorFor('alias')}
+          </p>
+        ) : null}
+      </div>
+      <div className="trivy-field">
+        <label>
+          Repository
+          <input
+            className="trivy-mono"
+            value={repository}
+            onChange={(event) => setRepository(event.target.value)}
+          />
+        </label>
+        {errorFor('repository') ? (
+          <p role="alert" className="trivy-field-error">
+            {errorFor('repository')}
+          </p>
+        ) : null}
+      </div>
+      <div className="trivy-field">
+        <label>
+          Java repository
+          <input
+            className="trivy-mono"
+            value={javaRepository}
+            onChange={(event) => setJavaRepository(event.target.value)}
+          />
+        </label>
+        {errorFor('javaRepository') ? (
+          <p role="alert" className="trivy-field-error">
+            {errorFor('javaRepository')}
+          </p>
+        ) : null}
+      </div>
       <label>
         Display name
         <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
@@ -96,9 +133,11 @@ export function DatabaseForm({ database, onSave, onCancel }: DatabaseFormProps):
         newPassword={newPassword}
         onNewPasswordChange={setNewPassword}
         warningText="The registry password is stored in clear text in the extension settings document. Anyone with read access to this collection's extension data can read it."
+        usernameError={errorFor('registryUsername')}
+        passwordError={errorFor('registryPassword')}
       />
 
-      <IssueList issues={issues} />
+      <IssueList issues={otherIssues} />
 
       <button type="button" onClick={submit}>
         Save

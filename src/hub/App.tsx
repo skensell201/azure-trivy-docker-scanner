@@ -9,9 +9,9 @@ import {
   ValidationIssue,
 } from '../shared/validation';
 import { SettingsConflictError } from './settingsStore';
-import { RunnerTable } from './components/RunnerTable';
+import { RunnerList } from './components/RunnerList';
 import { RunnerForm } from './components/RunnerForm';
-import { DatabaseTable } from './components/DatabaseTable';
+import { DatabaseList } from './components/DatabaseList';
 import { DatabaseForm } from './components/DatabaseForm';
 import { DefaultsForm } from './components/DefaultsForm';
 import { ALL_OVERRIDABLE_FIELDS, PolicyForm } from './components/PolicyForm';
@@ -357,54 +357,78 @@ export function App({ store }: AppProps): JSX.Element {
         ) : null}
 
         {tab === 'runners' ? (
-          editing !== undefined ? (
-            <RunnerForm
-              runner={editing === 'new' ? undefined : editing}
-              databases={databases}
-              onSave={(runner) => {
-                void handleSaveRunner(runner);
-              }}
-              onCancel={() => setEditing(undefined)}
-            />
-          ) : (
-            <>
+          <div className="trivy-split">
+            <div className="trivy-list-pane">
               <button type="button" onClick={() => setEditing('new')}>
                 Add runner
               </button>
-              <RunnerTable
+              <RunnerList
                 runners={runners}
-                onEdit={(runner) => setEditing(runner)}
-                onDelete={(runner) => {
+                selectedAlias={editing !== undefined && editing !== 'new' ? editing.alias : undefined}
+                onEdit={(runner: RunnerConfig) => setEditing(runner)}
+                onDelete={(runner: RunnerConfig) => {
                   void handleDeleteRunner(runner);
                 }}
               />
-            </>
-          )
+            </div>
+            {editing !== undefined ? (
+              <div className="trivy-detail-pane">
+                <h2 className="trivy-detail-title">
+                  {editing === 'new' ? 'Add runner' : `Edit runner: ${editing.alias}`}
+                </h2>
+                <RunnerForm
+                  runner={editing === 'new' ? undefined : editing}
+                  databases={databases}
+                  onSave={(runner) => {
+                    void handleSaveRunner(runner);
+                  }}
+                  onCancel={() => setEditing(undefined)}
+                />
+              </div>
+            ) : (
+              <div className="trivy-detail-pane trivy-detail-empty">
+                <p>Select a runner from the list, or add a new one.</p>
+              </div>
+            )}
+          </div>
         ) : null}
 
         {tab === 'databases' ? (
-          editingDatabase !== undefined ? (
-            <DatabaseForm
-              database={editingDatabase === 'new' ? undefined : editingDatabase}
-              onSave={(database) => {
-                void handleSaveDatabase(database);
-              }}
-              onCancel={() => setEditingDatabase(undefined)}
-            />
-          ) : (
-            <>
+          <div className="trivy-split">
+            <div className="trivy-list-pane">
               <button type="button" onClick={() => setEditingDatabase('new')}>
                 Add database
               </button>
-              <DatabaseTable
+              <DatabaseList
                 databases={databases}
-                onEdit={(database) => setEditingDatabase(database)}
-                onDelete={(database) => {
+                selectedAlias={
+                  editingDatabase !== undefined && editingDatabase !== 'new' ? editingDatabase.alias : undefined
+                }
+                onEdit={(database: DatabaseConfig) => setEditingDatabase(database)}
+                onDelete={(database: DatabaseConfig) => {
                   void handleDeleteDatabase(database);
                 }}
               />
-            </>
-          )
+            </div>
+            {editingDatabase !== undefined ? (
+              <div className="trivy-detail-pane">
+                <h2 className="trivy-detail-title">
+                  {editingDatabase === 'new' ? 'Add database' : `Edit database: ${editingDatabase.alias}`}
+                </h2>
+                <DatabaseForm
+                  database={editingDatabase === 'new' ? undefined : editingDatabase}
+                  onSave={(database) => {
+                    void handleSaveDatabase(database);
+                  }}
+                  onCancel={() => setEditingDatabase(undefined)}
+                />
+              </div>
+            ) : (
+              <div className="trivy-detail-pane trivy-detail-empty">
+                <p>Select a database from the list, or add a new one.</p>
+              </div>
+            )}
+          </div>
         ) : null}
 
         {tab === 'defaults' ? (

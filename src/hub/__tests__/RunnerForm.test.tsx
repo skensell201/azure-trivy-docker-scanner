@@ -72,15 +72,30 @@ describe('RunnerForm', () => {
     expect(screen.getByText(/clear text/i)).toBeTruthy();
   });
 
-  it('blocks saving an invalid runner and shows the reason', async () => {
+  it('blocks saving an invalid runner and shows the reason next to each field', async () => {
     const onSave = jest.fn();
     render(<RunnerForm runner={undefined} databases={[]} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), 'Bad Alias');
     await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy:latest');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert').textContent).toMatch(/lowercase/);
-    expect(screen.getByRole('alert').textContent).toMatch(/latest/);
+    // One field-level alert per invalid field, not a single combined block - each lives next to
+    // the input it concerns.
+    expect(screen.getByLabelText('Alias').closest('.trivy-field')?.textContent).toMatch(/lowercase/);
+    expect(screen.getByLabelText('Image').closest('.trivy-field')?.textContent).toMatch(/latest/);
+  });
+
+  it('shows a field-level validation message next to the field it concerns, not only in a combined block', async () => {
+    const onSave = jest.fn();
+    render(<RunnerForm runner={undefined} databases={[]} onSave={onSave} onCancel={jest.fn()} />);
+    await userEvent.type(screen.getByLabelText('Alias'), 'Bad Alias');
+    await userEvent.type(screen.getByLabelText('Image'), 'registry.example.com/trivy:0.58.1');
+    await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+    const aliasField = screen.getByLabelText('Alias').closest('.trivy-field');
+    expect(aliasField?.textContent).toMatch(/lowercase/i);
+    // The image field is valid, so it carries no error of its own even though the alias field does.
+    const imageField = screen.getByLabelText('Image').closest('.trivy-field');
+    expect(imageField?.textContent).not.toMatch(/lowercase/i);
   });
 
   it('saves a valid runner', async () => {

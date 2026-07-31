@@ -32,6 +32,13 @@ export interface RegistryCredentialFieldsProps {
   onNewPasswordChange: (value: string) => void;
   /** e.g. "The registry password is stored in clear text..." - names what the password belongs to. */
   warningText: string;
+  /**
+   * Field-level validation messages, rendered immediately next to the field they concern
+   * (see the operations-console pane's field-error convention) instead of only in a
+   * bottom-of-form issue list. Undefined when the field has no problem.
+   */
+  usernameError?: string;
+  passwordError?: string;
 }
 
 /**
@@ -52,13 +59,22 @@ export function RegistryCredentialFields({
   newPassword,
   onNewPasswordChange,
   warningText,
+  usernameError,
+  passwordError,
 }: RegistryCredentialFieldsProps): JSX.Element {
   return (
     <>
-      <label>
-        {usernameLabel}
-        <input value={username} onChange={(event) => onUsernameChange(event.target.value)} />
-      </label>
+      <div className="trivy-field">
+        <label>
+          {usernameLabel}
+          <input value={username} onChange={(event) => onUsernameChange(event.target.value)} />
+        </label>
+        {usernameError ? (
+          <p role="alert" className="trivy-field-error">
+            {usernameError}
+          </p>
+        ) : null}
+      </div>
 
       {hasStoredPassword && !replacingPassword ? (
         <div>
@@ -68,14 +84,21 @@ export function RegistryCredentialFields({
           </button>
         </div>
       ) : (
-        <label>
-          {passwordLabel}
-          <input
-            type="password"
-            value={newPassword}
-            onChange={(event) => onNewPasswordChange(event.target.value)}
-          />
-        </label>
+        <div className="trivy-field">
+          <label>
+            {passwordLabel}
+            <input
+              type="password"
+              value={newPassword}
+              onChange={(event) => onNewPasswordChange(event.target.value)}
+            />
+          </label>
+          {passwordError ? (
+            <p role="alert" className="trivy-field-error">
+              {passwordError}
+            </p>
+          ) : null}
+        </div>
       )}
       <p className="trivy-warning">{warningText}</p>
     </>

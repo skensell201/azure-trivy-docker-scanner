@@ -67,15 +67,17 @@ describe('DatabaseForm', () => {
     expect(screen.getByText(/clear text/i)).toBeTruthy();
   });
 
-  it('blocks saving an invalid database and shows the reason', async () => {
+  it('blocks saving an invalid database and shows the reason next to each field', async () => {
     const onSave = jest.fn();
     render(<DatabaseForm database={undefined} onSave={onSave} onCancel={jest.fn()} />);
     await userEvent.type(screen.getByLabelText('Alias'), 'Bad Alias');
     await userEvent.type(screen.getByLabelText(/^repository$/i), 'registry.example.com/trivy-db:latest');
     await userEvent.click(screen.getByRole('button', { name: 'Save' }));
     expect(onSave).not.toHaveBeenCalled();
-    expect(screen.getByRole('alert').textContent).toMatch(/lowercase/);
-    expect(screen.getByRole('alert').textContent).toMatch(/latest/);
+    // One field-level alert per invalid field, not a single combined block - each lives next to
+    // the input it concerns.
+    expect(screen.getByLabelText('Alias').closest('.trivy-field')?.textContent).toMatch(/lowercase/);
+    expect(screen.getByLabelText(/^repository$/i).closest('.trivy-field')?.textContent).toMatch(/latest/);
   });
 
   it('saves a valid database', async () => {

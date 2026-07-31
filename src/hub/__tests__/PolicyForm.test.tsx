@@ -32,8 +32,29 @@ describe('PolicyForm', () => {
   });
 
   it('warns which fields let a pipeline defeat the gate if left open', () => {
+    // The three gate-defeating fields now also get a fieldset legend naming them as a group
+    // ("Fields that can defeat the other locks"), which - deliberately - also contains the word
+    // "defeat"; the original `getByText(/extraTrivyArgs.*ignoreFile|defeat/i)` query now matches
+    // both the legend and the full explanation paragraph, so this is tightened to a direct,
+    // real-class lookup of the explanation paragraph rather than loosened to allow either match.
+    const { container } = render(<PolicyForm defaults={{ dbRepository: 'x:1' }} onSave={jest.fn()} />);
+    const warning = container.querySelector('.trivy-policy-group-critical .trivy-warning');
+    expect(warning?.textContent).toMatch(/extraTrivyArgs/);
+    expect(warning?.textContent).toMatch(/ignoreFile/);
+    expect(warning?.textContent).toMatch(/useDockerSocket/);
+    expect(warning?.textContent).toMatch(/defeat/i);
+  });
+
+  it('groups the three gate-defeating fields into their own labelled fieldset, saying why', () => {
     render(<PolicyForm defaults={{ dbRepository: 'x:1' }} onSave={jest.fn()} />);
-    expect(screen.getByText(/extraTrivyArgs.*ignoreFile|defeat/i)).toBeTruthy();
+    // A <fieldset> has an implicit "group" role, named by its <legend> - so this both confirms
+    // the fields are grouped in a fieldset and that the fieldset itself explains why.
+    const group = screen.getByRole('group', { name: /defeat the other locks/i });
+    expect(group.textContent).toMatch(/extraTrivyArgs/);
+    expect(group.textContent).toMatch(/ignoreFile/);
+    expect(group.textContent).toMatch(/useDockerSocket/);
+    // The other seven fields are not inside this same group.
+    expect(group.textContent).not.toMatch(/severities/);
   });
 
   it('saves an explicit list rather than relying on absence', async () => {
